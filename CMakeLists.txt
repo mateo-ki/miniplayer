@@ -13,9 +13,10 @@ option(MINIPLAYER_ENABLE_FFMPEG "Enable FFmpeg-backed media integration" OFF)
 set(MINIPLAYER_FFMPEG_PROVIDER "auto" CACHE STRING "FFmpeg discovery strategy: auto or custom-cache")
 set_property(CACHE MINIPLAYER_FFMPEG_PROVIDER PROPERTY STRINGS auto custom-cache)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Multimedia Test)
 
 qt_standard_project_setup()
+enable_testing()
 
 if(COMMAND qt_policy)
     qt_policy(SET QTP0001 NEW)
@@ -52,6 +53,24 @@ target_link_libraries(miniPlayer PRIVATE
     Qt6::Qml
     Qt6::Multimedia
 )
+
+add_executable(miniPlayerCoreTests
+    tests/unit/models/ModelTests.cpp
+    src/models/RuntimeLogModel.cpp
+    src/models/MediaInfoModel.cpp
+    src/infrastructure/Logger.cpp
+)
+
+target_include_directories(miniPlayerCoreTests PRIVATE
+    src
+)
+
+target_link_libraries(miniPlayerCoreTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+add_test(NAME miniPlayerCoreTests COMMAND $<TARGET_FILE:miniPlayerCoreTests>)
 
 if(MINIPLAYER_ENABLE_FFMPEG)
     if(MINIPLAYER_FFMPEG_PROVIDER STREQUAL "custom-cache")
