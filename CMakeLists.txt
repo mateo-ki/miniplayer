@@ -26,6 +26,10 @@ endif()
 qt_add_executable(miniPlayer
     src/app/main.cpp
     src/app/AppBootstrap.cpp
+    src/controller/PlayerController.cpp
+    src/models/RuntimeLogModel.cpp
+    src/models/MediaInfoModel.cpp
+    src/infrastructure/Logger.cpp
 )
 
 qt_add_qml_module(miniPlayer
@@ -56,6 +60,7 @@ target_link_libraries(miniPlayer PRIVATE
 
 add_executable(miniPlayerCoreTests
     tests/unit/models/ModelTests.cpp
+    src/controller/PlayerController.cpp
     src/models/RuntimeLogModel.cpp
     src/models/MediaInfoModel.cpp
     src/infrastructure/Logger.cpp

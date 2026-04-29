@@ -1,6 +1,7 @@
 #include "app/AppBootstrap.h"
 
 #include <QUrl>
+#include <QQmlContext>
 #include <QtGlobal>
 
 namespace {
@@ -11,6 +12,7 @@ constexpr char16_t kMainTypeName[] = u"Main";
 bool AppBootstrap::initialize() {
     configureEngine();
     registerQmlTypes();
+    exposeContextProperties();
     return loadMainWindow();
 }
 
@@ -20,6 +22,10 @@ void AppBootstrap::configureEngine() {
 
 void AppBootstrap::registerQmlTypes() {
     // Future controller and singleton registrations belong here.
+}
+
+void AppBootstrap::exposeContextProperties() {
+    m_engine.rootContext()->setContextProperty("playerController", &m_playerController);
 }
 
 bool AppBootstrap::loadMainWindow() {

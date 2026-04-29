@@ -97,8 +97,8 @@ Rectangle {
 
                         Text {
                             Layout.preferredWidth: 46
-                            color: root.levelColor(model.level)
-                            text: model.level
+                            color: root.levelColor(level)
+                            text: level
                             font.family: "Consolas"
                             font.pixelSize: root.theme ? root.theme.captionSize : 11
                         }
@@ -106,7 +106,7 @@ Rectangle {
                         Text {
                             Layout.fillWidth: true
                             color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
-                            text: model.message
+                            text: message
                             elide: Text.ElideRight
                             font.family: "Consolas"
                             font.pixelSize: root.theme ? root.theme.captionSize : 11

@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "controller/PlayerController.h"
 #include "infrastructure/Logger.h"
 #include "models/MediaInfoModel.h"
 #include "models/RuntimeLogModel.h"
@@ -24,6 +25,14 @@ class LoggerTests : public QObject {
 
 private slots:
     void emitsThroughConfiguredSink();
+};
+
+class PlayerControllerTests : public QObject {
+    Q_OBJECT
+
+private slots:
+    void exposesInitialIdleState();
+    void playPauseStopUpdateState();
 };
 
 void RuntimeLogModelTests::appendsVisibleLogEntries() {
@@ -76,6 +85,40 @@ void LoggerTests::emitsThroughConfiguredSink() {
     QCOMPARE(emittedMessage, QString("decode failed"));
 }
 
+void PlayerControllerTests::exposesInitialIdleState() {
+    PlayerController controller;
+
+    QCOMPARE(controller.isPlaying(), false);
+    QCOMPARE(controller.isPaused(), false);
+    QCOMPARE(controller.durationMs(), 0);
+    QCOMPARE(controller.positionMs(), 0);
+    QCOMPARE(controller.volume(), 1.0f);
+    QCOMPARE(controller.muted(), false);
+    QCOMPARE(controller.currentFile(), QString(""));
+    QVERIFY(controller.mediaInfoModel() != nullptr);
+    QVERIFY(controller.runtimeLogModel() != nullptr);
+}
+
+void PlayerControllerTests::playPauseStopUpdateState() {
+    PlayerController controller;
+
+    controller.play();
+    QCOMPARE(controller.isPlaying(), true);
+    QCOMPARE(controller.isPaused(), false);
+
+    controller.pause();
+    QCOMPARE(controller.isPlaying(), true);
+    QCOMPARE(controller.isPaused(), true);
+
+    controller.seek(2400);
+    QCOMPARE(controller.positionMs(), 2400);
+
+    controller.stop();
+    QCOMPARE(controller.isPlaying(), false);
+    QCOMPARE(controller.isPaused(), false);
+    QCOMPARE(controller.positionMs(), 0);
+}
+
 int main(int argc, char **argv) {
     int status = 0;
 
@@ -89,6 +132,10 @@ int main(int argc, char **argv) {
     }
     {
         LoggerTests tests;
+        status |= QTest::qExec(&tests, argc, argv);
+    }
+    {
+        PlayerControllerTests tests;
         status |= QTest::qExec(&tests, argc, argv);
     }
 

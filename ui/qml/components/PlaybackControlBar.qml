@@ -6,6 +6,21 @@ Rectangle {
     id: root
 
     property QtObject theme
+    property string positionText: "00:00"
+    property string durationText: "00:00"
+    property real progressFrom: 0
+    property real progressTo: 100
+    property real progressValue: 0
+    property real volumeValue: 100
+    property var statusTags: []
+    property bool emptyState: true
+
+    signal openRequested()
+    signal playRequested()
+    signal pauseRequested()
+    signal stopRequested()
+    signal seekRequested(real value)
+    signal volumeRequested(real value)
 
     color: theme ? theme.chromeColor : "#171717"
     radius: theme ? theme.panelRadius : 14
@@ -22,7 +37,7 @@ Rectangle {
 
             Text {
                 color: theme ? theme.textSecondaryColor : "#bebebe"
-                text: "00:53"
+                text: root.positionText
                 font.family: theme ? theme.fontFamily : "Segoe UI"
                 font.pixelSize: theme ? theme.bodySize : 13
             }
@@ -30,9 +45,10 @@ Rectangle {
             Slider {
                 id: timeline
                 Layout.fillWidth: true
-                from: 0
-                to: 100
-                value: 32
+                from: root.progressFrom
+                to: root.progressTo
+                value: root.progressValue
+                onMoved: root.seekRequested(value)
 
                 background: Rectangle {
                     x: timeline.leftPadding
@@ -64,7 +80,7 @@ Rectangle {
 
             Text {
                 color: theme ? theme.textSecondaryColor : "#bebebe"
-                text: "03:42"
+                text: root.durationText
                 font.family: theme ? theme.fontFamily : "Segoe UI"
                 font.pixelSize: theme ? theme.bodySize : 13
             }
@@ -73,13 +89,34 @@ Rectangle {
         RowLayout {
             spacing: 12
 
+            ToolButton {
+                Layout.preferredWidth: 72
+                Layout.preferredHeight: 48
+                onClicked: root.openRequested()
+
+                background: Rectangle {
+                    radius: 24
+                    color: root.theme ? root.theme.accentColor : "#f28c28"
+                    border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
+                    border.width: 1
+                }
+
+                contentItem: Text {
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    color: "#101010"
+                    text: "Open"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: root.theme ? root.theme.bodySize : 13
+                    font.bold: true
+                }
+            }
+
             Repeater {
                 model: [
-                    { symbol: "|<", emphasized: false },
-                    { symbol: "||", emphasized: false },
-                    { symbol: ">", emphasized: true },
-                    { symbol: ">|", emphasized: false },
-                    { symbol: "[]", emphasized: false }
+                    { symbol: ">", emphasized: true, action: "play" },
+                    { symbol: "||", emphasized: false, action: "pause" },
+                    { symbol: "[]", emphasized: false, action: "stop" }
                 ]
 
                 delegate: ToolButton {
@@ -87,6 +124,14 @@ Rectangle {
 
                     Layout.preferredWidth: modelData.emphasized ? 56 : 48
                     Layout.preferredHeight: modelData.emphasized ? 56 : 48
+                    onClicked: {
+                        if (modelData.action === "play")
+                            root.playRequested()
+                        else if (modelData.action === "pause")
+                            root.pauseRequested()
+                        else if (modelData.action === "stop")
+                            root.stopRequested()
+                    }
 
                     background: Rectangle {
                         radius: width / 2
@@ -136,7 +181,8 @@ Rectangle {
                         Layout.fillWidth: true
                         from: 0
                         to: 100
-                        value: 74
+                        value: root.volumeValue
+                        onMoved: root.volumeRequested(value)
                     }
                 }
             }
@@ -146,11 +192,7 @@ Rectangle {
             }
 
             Repeater {
-                model: [
-                    { label: "Repeat off" },
-                    { label: "Subtitles ready" },
-                    { label: "Renderer: QML shell" }
-                ]
+                model: root.statusTags
 
                 delegate: Rectangle {
                     Layout.preferredHeight: 38
@@ -171,6 +213,16 @@ Rectangle {
                     }
                 }
             }
+        }
+
+        Text {
+            color: theme ? theme.textMutedColor : "#858585"
+            text: root.emptyState
+                ? "Open is the primary action in this shell; transport signals are reserved for PlayerController binding."
+                : "Transport controls are wired to PlayerController shell state."
+            wrapMode: Text.WordWrap
+            font.family: theme ? theme.fontFamily : "Segoe UI"
+            font.pixelSize: theme ? theme.captionSize : 11
         }
     }
 }

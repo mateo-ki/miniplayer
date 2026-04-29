@@ -95,7 +95,7 @@ Rectangle {
                     Text {
                         Layout.preferredWidth: 92
                         color: root.theme ? root.theme.textMutedColor : "#858585"
-                        text: modelData.key
+                        text: typeof key !== "undefined" ? key : modelData.key
                         font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                         font.pixelSize: root.theme ? root.theme.captionSize : 11
                     }
@@ -103,7 +103,7 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
-                        text: modelData.value
+                        text: typeof value !== "undefined" ? value : modelData.value
                         elide: Text.ElideRight
                         font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                         font.pixelSize: root.theme ? root.theme.bodySize : 13
