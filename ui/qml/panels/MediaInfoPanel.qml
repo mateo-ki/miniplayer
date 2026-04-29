@@ -6,6 +6,10 @@ Rectangle {
     id: root
 
     property QtObject theme
+    property string selectedTitle: "No media selected"
+    property string selectedSubtitle: "Open a local file to populate MediaInfoModel-backed details."
+    property var infoModel: []
+    property var flagModel: []
 
     color: theme ? theme.panelColor : "#1c1c1c"
     radius: theme ? theme.panelRadius : 14
@@ -47,7 +51,7 @@ Rectangle {
 
                 Text {
                     color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
-                    text: "Night Drive Session"
+                    text: root.selectedTitle
                     font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                     font.pixelSize: 20
                     font.bold: true
@@ -55,7 +59,7 @@ Rectangle {
 
                 Text {
                     color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
-                    text: "Preview metadata shell for future controller binding"
+                    text: root.selectedSubtitle
                     wrapMode: Text.WordWrap
                     font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                     font.pixelSize: root.theme ? root.theme.bodySize : 13
@@ -72,13 +76,7 @@ Rectangle {
         }
 
         Repeater {
-            model: [
-                { key: "Container", value: "Matroska (.mkv)" },
-                { key: "Video", value: "3840x2160 • 23.976 fps • 10-bit" },
-                { key: "Audio", value: "5.1 surround • 48 kHz" },
-                { key: "Subtitles", value: "2 tracks discovered" },
-                { key: "Last scan", value: "2026-04-29 10:24" }
-            ]
+            model: root.infoModel
 
             delegate: Rectangle {
                 Layout.fillWidth: true
@@ -136,11 +134,7 @@ Rectangle {
                 }
 
                 Repeater {
-                    model: [
-                        { label: "Hardware decode requested", tone: "success" },
-                        { label: "Frame statistics unavailable", tone: "warning" },
-                        { label: "Controller detached in this task", tone: "danger" }
-                    ]
+                    model: root.flagModel
 
                     delegate: Rectangle {
                         Layout.fillWidth: true

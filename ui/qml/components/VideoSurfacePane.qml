@@ -6,6 +6,10 @@ Rectangle {
     id: root
 
     property QtObject theme
+    property bool emptyState: true
+    property string currentFileTitle: ""
+    property string emptyTitle: "Open a local video file to begin"
+    property string emptySubtitle: "This pane reserves the largest region for future rendering."
 
     color: theme ? theme.surfaceColor : "#101010"
     radius: theme ? theme.panelRadius : 14
@@ -57,9 +61,9 @@ Rectangle {
                 Text {
                     anchors.centerIn: parent
                     color: root.theme ? root.theme.accentColor : "#f28c28"
-                    text: ">"
+                    text: root.emptyState ? "Open" : ">"
                     font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                    font.pixelSize: 40
+                    font.pixelSize: root.emptyState ? 18 : 40
                     font.bold: true
                 }
             }
@@ -67,7 +71,7 @@ Rectangle {
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
-                text: "Video surface placeholder"
+                text: root.emptyState ? root.emptyTitle : root.currentFileTitle
                 font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                 font.pixelSize: root.theme ? root.theme.sectionTitleSize : 16
                 font.bold: true
@@ -77,7 +81,9 @@ Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 horizontalAlignment: Text.AlignHCenter
                 color: root.theme ? root.theme.textMutedColor : "#858585"
-                text: "PlayerController stays disconnected in Task 2.\nThis pane reserves the largest region for future rendering."
+                text: root.emptyState
+                    ? root.emptySubtitle
+                    : "PlayerController stays disconnected in Task 2.\nThis pane reserves the largest region for future rendering."
                 font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                 font.pixelSize: root.theme ? root.theme.bodySize : 13
             }
@@ -88,7 +94,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: 20
-        width: 144
+        width: 160
         height: 34
         radius: theme ? theme.controlRadius : 10
         color: "#0f0f0f"
@@ -105,52 +111,14 @@ Rectangle {
                 Layout.preferredWidth: 8
                 Layout.preferredHeight: 8
                 radius: 4
-                color: root.theme ? root.theme.warningColor : "#f0b34a"
+                color: root.emptyState
+                    ? (root.theme ? root.theme.warningColor : "#f0b34a")
+                    : (root.theme ? root.theme.successColor : "#6ec16e")
             }
 
             Text {
                 color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
-                text: "Preview staging"
-                font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                font.pixelSize: root.theme ? root.theme.captionSize : 11
-            }
-        }
-    }
-
-    Rectangle {
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 20
-        width: 200
-        height: 74
-        radius: theme ? theme.controlRadius : 10
-        color: "#0f0f0f"
-        border.color: theme ? theme.subtleBorderColor : "#282828"
-        border.width: 1
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 12
-            spacing: 4
-
-            Text {
-                color: root.theme ? root.theme.textMutedColor : "#858585"
-                text: "Viewport"
-                font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                font.pixelSize: root.theme ? root.theme.captionSize : 11
-            }
-
-            Text {
-                color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
-                text: "1920 x 1080"
-                font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                font.pixelSize: root.theme ? root.theme.sectionTitleSize : 16
-                font.bold: true
-            }
-
-            Text {
-                color: root.theme ? root.theme.textMutedColor : "#858585"
-                text: "GPU handoff pending later tasks"
+                text: root.emptyState ? "Empty session" : "Preview staging"
                 font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                 font.pixelSize: root.theme ? root.theme.captionSize : 11
             }

@@ -6,6 +6,8 @@ Rectangle {
     id: root
 
     property QtObject theme
+    property string currentFileTitle: ""
+    property string currentFileSubtitle: ""
 
     color: theme ? theme.chromeColor : "#171717"
     radius: theme ? theme.panelRadius : 14
@@ -47,9 +49,12 @@ Rectangle {
 
             Text {
                 color: theme ? theme.textMutedColor : "#858585"
-                text: "Desktop shell foundation"
+                text: root.currentFileTitle.length > 0
+                    ? root.currentFileTitle
+                    : "Desktop shell foundation"
                 font.family: theme ? theme.fontFamily : "Segoe UI"
                 font.pixelSize: theme ? theme.captionSize : 11
+                elide: Text.ElideRight
             }
         }
 
@@ -73,7 +78,7 @@ Rectangle {
 
                 Text {
                     color: theme ? theme.textMutedColor : "#858585"
-                    text: "Search"
+                    text: root.currentFileTitle.length > 0 ? "Current file" : "Open local media"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.bodySize : 13
                 }
@@ -84,15 +89,16 @@ Rectangle {
 
                 Text {
                     color: theme ? theme.accentColor : "#f28c28"
-                    text: "Ctrl+K"
+                    text: root.currentFileSubtitle.length > 0 ? root.currentFileSubtitle : "Ctrl+O"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.captionSize : 11
+                    elide: Text.ElideLeft
                 }
             }
         }
 
         Rectangle {
-            Layout.preferredWidth: 150
+            Layout.preferredWidth: 170
             Layout.preferredHeight: 40
             radius: theme ? theme.controlRadius : 10
             color: theme ? theme.panelRaisedColor : "#242424"
@@ -114,42 +120,9 @@ Rectangle {
 
                 Text {
                     color: theme ? theme.textSecondaryColor : "#bebebe"
-                    text: "Shell only"
+                    text: root.currentFileTitle.length > 0 ? "Mock data loaded" : "Awaiting file open"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.bodySize : 13
-                }
-            }
-        }
-
-        Repeater {
-            model: [
-                { label: "Queue" },
-                { label: "Prefs" },
-                { label: "About" }
-            ]
-
-            delegate: ToolButton {
-                id: navButton
-
-                Layout.preferredWidth: 72
-                Layout.preferredHeight: 40
-
-                background: Rectangle {
-                    radius: root.theme ? root.theme.controlRadius : 10
-                    color: navButton.down ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
-                                          : (navButton.hovered ? (root.theme ? root.theme.panelRaisedColor : "#242424")
-                                                               : "transparent")
-                    border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
-                    border.width: 1
-                }
-
-                contentItem: Text {
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
-                    text: modelData.label
-                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                    font.pixelSize: root.theme ? root.theme.bodySize : 13
                 }
             }
         }

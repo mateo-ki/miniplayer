@@ -6,6 +6,13 @@ Rectangle {
     id: root
 
     property QtObject theme
+    property string currentFileTitle: ""
+    property string currentFileSubtitle: ""
+    property var queueModel: []
+    property int itemCount: 0
+    property int queuedCount: 0
+    property string targetLabel: "Local file"
+    property bool emptyState: true
 
     color: theme ? theme.panelColor : "#1c1c1c"
     radius: theme ? theme.panelRadius : 14
@@ -47,16 +54,17 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         color: theme ? theme.accentColor : "#f28c28"
-                        text: "♪"
+                        text: root.emptyState ? "Open" : "Now"
                         font.family: theme ? theme.fontFamily : "Segoe UI"
-                        font.pixelSize: 28
+                        font.pixelSize: 20
+                        font.bold: true
                     }
                 }
 
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
                     color: theme ? theme.textPrimaryColor : "#f3f3f3"
-                    text: "Night Drive Session"
+                    text: root.currentFileTitle.length > 0 ? root.currentFileTitle : "No file loaded"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.bodySize : 13
                     font.bold: true
@@ -65,7 +73,9 @@ Rectangle {
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
                     color: theme ? theme.textMutedColor : "#858585"
-                    text: "Unbound visuals • placeholder"
+                    text: root.currentFileSubtitle.length > 0
+                        ? root.currentFileSubtitle
+                        : "Use Open to start a local playback session"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.captionSize : 11
                 }
@@ -87,9 +97,9 @@ Rectangle {
 
                 Repeater {
                     model: [
-                        { value: "14", label: "items" },
-                        { value: "02", label: "queued" },
-                        { value: "HD", label: "target" }
+                        { value: root.itemCount, label: "items" },
+                        { value: root.queuedCount, label: "queued" },
+                        { value: root.targetLabel, label: "target" }
                     ]
 
                     delegate: ColumnLayout {
@@ -124,17 +134,13 @@ Rectangle {
         }
 
         Repeater {
-            model: [
-                { title: "Ocean Avenue.mp4", meta: "00:03:42 • H.264 • pending" },
-                { title: "Quiet Signals.flac", meta: "00:05:16 • stereo • pending" },
-                { title: "Studio Reel.mov", meta: "00:01:58 • ProRes • pending" }
-            ]
+            model: root.queueModel
 
             delegate: Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 62
                 radius: root.theme ? root.theme.controlRadius : 10
-                color: index === 0 ? "#191919" : "#151515"
+                color: "#151515"
                 border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
                 border.width: 1
 
@@ -147,13 +153,11 @@ Rectangle {
                         Layout.preferredWidth: 38
                         Layout.preferredHeight: 38
                         radius: 8
-                        color: index === 0 ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
-                                           : (root.theme ? root.theme.panelRaisedColor : "#242424")
+                        color: root.theme ? root.theme.panelRaisedColor : "#242424"
 
                         Text {
                             anchors.centerIn: parent
-                            color: index === 0 ? (root.theme ? root.theme.accentColor : "#f28c28")
-                                               : (root.theme ? root.theme.textSecondaryColor : "#bebebe")
+                            color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
                             text: index + 1
                             font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
                             font.pixelSize: 14
