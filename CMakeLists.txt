@@ -32,6 +32,13 @@ qt_add_qml_module(miniPlayer
     VERSION 1.0
     QML_FILES
         ui/qml/Main.qml
+        ui/qml/themes/Theme.qml
+        ui/qml/components/TopBar.qml
+        ui/qml/components/PlaybackControlBar.qml
+        ui/qml/components/VideoSurfacePane.qml
+        ui/qml/panels/CurrentMediaPanel.qml
+        ui/qml/panels/MediaInfoPanel.qml
+        ui/qml/panels/RuntimeLogPanel.qml
 )
 
 target_include_directories(miniPlayer PRIVATE
