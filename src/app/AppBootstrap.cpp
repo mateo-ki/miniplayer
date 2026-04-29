@@ -3,7 +3,7 @@
 #include <QUrl>
 #include <QQmlContext>
 #include <QtGlobal>
-
+#include "common/constant.h"
 namespace {
 constexpr char16_t kMainModuleUri[] = u"MiniPlayer";
 constexpr char16_t kMainTypeName[] = u"Main";
@@ -17,6 +17,7 @@ bool AppBootstrap::initialize() {
 }
 
 void AppBootstrap::configureEngine() {
+    initVcpkgRuntimeEnv(m_engine);
     m_engine.addImportPath(QStringLiteral("qrc:/qt/qml"));
 }
 

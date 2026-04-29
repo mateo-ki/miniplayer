@@ -59,11 +59,13 @@ target_link_libraries(miniPlayer PRIVATE
 )
 
 add_executable(miniPlayerCoreTests
+    src/common/constant.h
     tests/unit/models/ModelTests.cpp
     src/controller/PlayerController.cpp
     src/models/RuntimeLogModel.cpp
     src/models/MediaInfoModel.cpp
     src/infrastructure/Logger.cpp
+
 )
 
 target_include_directories(miniPlayerCoreTests PRIVATE
@@ -80,19 +82,69 @@ add_test(NAME miniPlayerCoreTests COMMAND $<TARGET_FILE:miniPlayerCoreTests>)
 if(MINIPLAYER_ENABLE_FFMPEG)
     if(MINIPLAYER_FFMPEG_PROVIDER STREQUAL "custom-cache")
         list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-        find_package(FFmpeg QUIET COMPONENTS avformat avcodec avutil swresample swscale)
+        find_package(FFmpeg QUIET COMPONENTS avformat avcodec avutil)
     else()
-        find_package(FFmpeg QUIET CONFIG COMPONENTS avformat avcodec avutil swresample swscale)
-        if(NOT FFmpeg_FOUND)
-            find_package(FFMPEG QUIET)
-        endif()
+        find_package(FFMPEG QUIET)
     endif()
 
-    if(FFmpeg_FOUND OR FFMPEG_FOUND)
-        message(STATUS "FFmpeg was discovered for future media tasks. Bootstrap stage keeps the app target free of FFmpeg link dependencies.")
+    set(miniPlayerFfmpegTargets
+        FFmpeg::avformat
+        FFmpeg::avcodec
+        FFmpeg::avutil
+    )
+
+    set(miniPlayerHasFfmpegTargets TRUE)
+    foreach(miniPlayerFfmpegTarget IN LISTS miniPlayerFfmpegTargets)
+        if(NOT TARGET ${miniPlayerFfmpegTarget})
+            set(miniPlayerHasFfmpegTargets FALSE)
+        endif()
+    endforeach()
+
+    if((FFmpeg_FOUND OR FFMPEG_FOUND) AND miniPlayerHasFfmpegTargets)
+        message(STATUS "FFmpeg was discovered for media task 5 and imported targets are available.")
+
+        target_sources(miniPlayer PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/core/MediaSession.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/media/MediaInfoExtractor.cpp
+        )
+
+        target_link_libraries(miniPlayer PRIVATE
+            ${miniPlayerFfmpegTargets}
+        )
+
+        add_executable(miniPlayerMediaTests
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/media/MediaSessionTests.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/core/MediaSession.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/media/MediaInfoExtractor.cpp
+        )
+
+        target_include_directories(miniPlayerMediaTests PRIVATE
+            src
+        )
+
+        target_link_libraries(miniPlayerMediaTests PRIVATE
+            Qt6::Core
+            Qt6::Test
+            ${miniPlayerFfmpegTargets}
+        )
+
+        add_test(NAME miniPlayerMediaTests COMMAND $<TARGET_FILE:miniPlayerMediaTests>)
     else()
-        message(STATUS "FFmpeg discovery was requested but no package was found. Bootstrap stage continues because FFmpeg is not linked yet.")
+        message(STATUS "FFmpeg discovery was requested but imported targets are unavailable. Media task 5 targets are skipped.")
     endif()
 else()
     message(STATUS "FFmpeg integration is disabled for the bootstrap skeleton. Enable MINIPLAYER_ENABLE_FFMPEG once media pipeline work begins.")
+endif()
+
+
+if (MSVC)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/platforms
+
+            COMMAND ${CMAKE_COMMAND} -E copy
+            #            "${_VCPKG_INSTALLED_DIR}/x64-windows/tools/Qt6/plugins/platforms/qwindows$<$<CONFIG:Debug>:d>.dll"
+            "${_VCPKG_INSTALLED_DIR}/x64-windows/$<$<CONFIG:Debug>:debug/>/Qt6/plugins/platforms/qwindows$<$<CONFIG:Debug>:d>.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/platforms"
+    )
 endif()
