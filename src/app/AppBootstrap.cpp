@@ -4,8 +4,8 @@
 #include <QtGlobal>
 
 namespace {
-constexpr auto kMainModuleUri = "MiniPlayer";
-constexpr auto kMainTypeName = "Main";
+constexpr char16_t kMainModuleUri[] = u"MiniPlayer";
+constexpr char16_t kMainTypeName[] = u"Main";
 }
 
 bool AppBootstrap::initialize() {
@@ -24,7 +24,7 @@ void AppBootstrap::registerQmlTypes() {
 
 bool AppBootstrap::loadMainWindow() {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    m_engine.loadFromModule(QStringLiteral(kMainModuleUri), QStringLiteral(kMainTypeName));
+    m_engine.loadFromModule(kMainModuleUri, kMainTypeName);
 #else
     m_engine.load(QUrl(QStringLiteral("qrc:/qt/qml/MiniPlayer/Main.qml")));
 #endif

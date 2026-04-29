@@ -9,13 +9,18 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
 option(MINIPLAYER_ENABLE_FFMPEG "Enable FFmpeg-backed media integration" OFF)
+set(MINIPLAYER_FFMPEG_PROVIDER "auto" CACHE STRING "FFmpeg discovery strategy: auto or custom-cache")
+set_property(CACHE MINIPLAYER_FFMPEG_PROVIDER PROPERTY STRINGS auto custom-cache)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Multimedia)
 
 qt_standard_project_setup()
+
+if(COMMAND qt_policy)
+    qt_policy(SET QTP0001 NEW)
+    qt_policy(SET QTP0004 NEW)
+endif()
 
 qt_add_executable(miniPlayer
     src/app/main.cpp
@@ -42,15 +47,21 @@ target_link_libraries(miniPlayer PRIVATE
 )
 
 if(MINIPLAYER_ENABLE_FFMPEG)
-    find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swresample swscale)
+    if(MINIPLAYER_FFMPEG_PROVIDER STREQUAL "custom-cache")
+        list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+        find_package(FFmpeg QUIET COMPONENTS avformat avcodec avutil swresample swscale)
+    else()
+        find_package(FFmpeg QUIET CONFIG COMPONENTS avformat avcodec avutil swresample swscale)
+        if(NOT FFmpeg_FOUND)
+            find_package(FFMPEG QUIET)
+        endif()
+    endif()
 
-    target_link_libraries(miniPlayer PRIVATE
-        FFmpeg::avformat
-        FFmpeg::avcodec
-        FFmpeg::avutil
-        FFmpeg::swresample
-        FFmpeg::swscale
-    )
+    if(FFmpeg_FOUND OR FFMPEG_FOUND)
+        message(STATUS "FFmpeg was discovered for future media tasks. Bootstrap stage keeps the app target free of FFmpeg link dependencies.")
+    else()
+        message(STATUS "FFmpeg discovery was requested but no package was found. Bootstrap stage continues because FFmpeg is not linked yet.")
+    endif()
 else()
     message(STATUS "FFmpeg integration is disabled for the bootstrap skeleton. Enable MINIPLAYER_ENABLE_FFMPEG once media pipeline work begins.")
 endif()
