@@ -4,8 +4,12 @@
 
 class AppBootstrap {
 public:
-    void initialize();
+    bool initialize();
 
 private:
+    void configureEngine();
+    void registerQmlTypes();
+    bool loadMainWindow();
+
     QQmlApplicationEngine m_engine;
 };

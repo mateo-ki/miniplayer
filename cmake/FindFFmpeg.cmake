@@ -2,6 +2,7 @@ include(FindPackageHandleStandardArgs)
 
 set(FFMPEG_ROOT "" CACHE PATH "Root directory of the FFmpeg installation")
 set(FFMPEG_INCLUDE_DIR "" CACHE PATH "Directory containing FFmpeg headers")
+set(FFMPEG_ENABLE_DISCOVERY OFF CACHE BOOL "Allow FindFFmpeg.cmake to search under FFMPEG_ROOT")
 set(FFMPEG_AVFORMAT_LIBRARY "" CACHE FILEPATH "Path to the avformat library")
 set(FFMPEG_AVCODEC_LIBRARY "" CACHE FILEPATH "Path to the avcodec library")
 set(FFMPEG_AVUTIL_LIBRARY "" CACHE FILEPATH "Path to the avutil library")
@@ -16,7 +17,7 @@ if(DEFINED ENV{FFMPEG_ROOT} AND NOT "$ENV{FFMPEG_ROOT}" STREQUAL "")
     list(APPEND _ffmpeg_root_hints "$ENV{FFMPEG_ROOT}")
 endif()
 
-if(NOT FFMPEG_INCLUDE_DIR)
+if(FFMPEG_ENABLE_DISCOVERY AND NOT FFMPEG_INCLUDE_DIR)
     find_path(FFMPEG_INCLUDE_DIR
         NAMES libavformat/avformat.h
         HINTS ${_ffmpeg_root_hints}
@@ -30,11 +31,12 @@ foreach(_component IN LISTS _ffmpeg_components)
     string(TOUPPER "${_component}" _component_upper)
     set(_library_var "FFMPEG_${_component_upper}_LIBRARY")
 
-    if(NOT DEFINED ${_library_var} OR "${${_library_var}}" STREQUAL "")
+    if(FFMPEG_ENABLE_DISCOVERY
+       AND (NOT DEFINED ${_library_var} OR "${${_library_var}}" STREQUAL ""))
         find_library(${_library_var}
             NAMES ${_component} lib${_component}
             HINTS ${_ffmpeg_root_hints}
-            PATH_SUFFIXES lib bin
+            PATH_SUFFIXES lib lib64
         )
     endif()
 
@@ -57,6 +59,16 @@ foreach(_component IN LISTS _ffmpeg_components)
         set(FFmpeg_${_component}_FOUND FALSE)
     endif()
 endforeach()
+
+mark_as_advanced(
+    FFMPEG_ENABLE_DISCOVERY
+    FFMPEG_INCLUDE_DIR
+    FFMPEG_AVFORMAT_LIBRARY
+    FFMPEG_AVCODEC_LIBRARY
+    FFMPEG_AVUTIL_LIBRARY
+    FFMPEG_SWRESAMPLE_LIBRARY
+    FFMPEG_SWSCALE_LIBRARY
+)
 
 find_package_handle_standard_args(FFmpeg
     REQUIRED_VARS

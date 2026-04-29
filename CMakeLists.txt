@@ -11,8 +11,9 @@ set(CMAKE_AUTOUIC ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+option(MINIPLAYER_ENABLE_FFMPEG "Enable FFmpeg-backed media integration" OFF)
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Multimedia)
-find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swresample swscale)
 
 qt_standard_project_setup()
 
@@ -38,9 +39,18 @@ target_link_libraries(miniPlayer PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::Multimedia
-    FFmpeg::avformat
-    FFmpeg::avcodec
-    FFmpeg::avutil
-    FFmpeg::swresample
-    FFmpeg::swscale
 )
+
+if(MINIPLAYER_ENABLE_FFMPEG)
+    find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swresample swscale)
+
+    target_link_libraries(miniPlayer PRIVATE
+        FFmpeg::avformat
+        FFmpeg::avcodec
+        FFmpeg::avutil
+        FFmpeg::swresample
+        FFmpeg::swscale
+    )
+else()
+    message(STATUS "FFmpeg integration is disabled for the bootstrap skeleton. Enable MINIPLAYER_ENABLE_FFMPEG once media pipeline work begins.")
+endif()
