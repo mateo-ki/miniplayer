@@ -41,7 +41,7 @@ Rectangle {
 
             Text {
                 color: theme ? theme.textPrimaryColor : "#f3f3f3"
-                text: "miniPlayer"
+                text: "MeloBox"
                 font.family: theme ? theme.fontFamily : "Segoe UI"
                 font.pixelSize: theme ? theme.titleSize : 22
                 font.bold: true

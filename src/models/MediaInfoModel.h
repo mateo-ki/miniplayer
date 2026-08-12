@@ -25,6 +25,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void replaceAll(const QVector<MediaInfoItem> &items);
+    const QVector<MediaInfoItem> &items() const { return items_; }
 
 private:
     QVector<MediaInfoItem> items_;

@@ -1,31 +1,31 @@
 import QtQuick
 
 QtObject {
-    readonly property color windowColor: "#111111"
-    readonly property color chromeColor: "#171717"
-    readonly property color panelColor: "#1c1c1c"
-    readonly property color panelRaisedColor: "#242424"
-    readonly property color surfaceColor: "#101010"
-    readonly property color borderColor: "#353535"
-    readonly property color subtleBorderColor: "#282828"
-    readonly property color accentColor: "#f28c28"
-    readonly property color accentMutedColor: "#7a4a17"
-    readonly property color textPrimaryColor: "#f3f3f3"
-    readonly property color textSecondaryColor: "#bebebe"
-    readonly property color textMutedColor: "#858585"
-    readonly property color successColor: "#6ec16e"
-    readonly property color warningColor: "#f0b34a"
+    readonly property color windowColor: "#0e1116"
+    readonly property color chromeColor: "#121722"
+    readonly property color panelColor: "#171d27"
+    readonly property color panelRaisedColor: "#202838"
+    readonly property color surfaceColor: "#0b0f15"
+    readonly property color borderColor: "#344052"
+    readonly property color subtleBorderColor: "#252d3a"
+    readonly property color accentColor: "#e7a448"
+    readonly property color accentMutedColor: "#3b2a16"
+    readonly property color textPrimaryColor: "#f4f7fb"
+    readonly property color textSecondaryColor: "#b9c2d0"
+    readonly property color textMutedColor: "#7f8a9c"
+    readonly property color successColor: "#54c48a"
+    readonly property color warningColor: "#e7b85d"
     readonly property color dangerColor: "#e06c63"
 
-    readonly property int windowRadius: 18
-    readonly property int panelRadius: 14
-    readonly property int controlRadius: 10
+    readonly property int windowRadius: 14
+    readonly property int panelRadius: 10
+    readonly property int controlRadius: 8
     readonly property int edgePadding: 20
     readonly property int gap: 14
     readonly property int sidebarWidth: 316
     readonly property int infoPanelWidth: 340
     readonly property int topBarHeight: 72
-    readonly property int controlBarHeight: 126
+    readonly property int controlBarHeight: 100
     readonly property int logPanelHeight: 168
 
     readonly property int titleSize: 22

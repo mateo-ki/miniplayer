@@ -12,6 +12,8 @@ build-*/
 *.lib
 *.exp
 *.log
+third_party/mpv/*.7z
+third_party/mpv/*.json
 .superpowers/
 .worktrees/
 compile_commands.json
