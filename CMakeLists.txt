@@ -26,6 +26,32 @@ find_package(OpenSSL REQUIRED)
 qt_standard_project_setup()
 if(MELOBOX_BUILD_TESTS)
     enable_testing()
+
+    # 书源规则引擎测试只依赖 Qt Core/Qml/Network，与 FFmpeg 无关，
+    # 单独成目标以便在缺少 FFmpeg 的环境也能验证书源解析。
+    add_executable(miniPlayerBookTests
+        tests/unit/book/LegadoRuleTests.cpp
+        src/book/BookSource.cpp
+        src/book/HtmlDom.cpp
+        src/book/RuleEngine.cpp
+        src/book/LegadoClient.cpp
+        src/models/LegadoSourceModel.cpp
+        src/models/LegadoBookModel.cpp
+        src/infrastructure/Logger.cpp
+    )
+
+    target_include_directories(miniPlayerBookTests PRIVATE
+        src
+    )
+
+    target_link_libraries(miniPlayerBookTests PRIVATE
+        Qt6::Core
+        Qt6::Qml
+        Qt6::Network
+        Qt6::Test
+    )
+
+    add_test(NAME miniPlayerBookTests COMMAND $<TARGET_FILE:miniPlayerBookTests>)
 endif()
 
 if(COMMAND qt_policy)
@@ -57,6 +83,12 @@ add_library(miniPlayerModels STATIC
     src/models/BeeVideoModel.cpp
     src/models/BeeScheduleModel.cpp
     src/media/BeeClient.cpp
+    src/book/BookSource.cpp
+    src/book/HtmlDom.cpp
+    src/book/RuleEngine.cpp
+    src/book/LegadoClient.cpp
+    src/models/LegadoSourceModel.cpp
+    src/models/LegadoBookModel.cpp
 )
 
 target_include_directories(miniPlayerModels PUBLIC
@@ -66,6 +98,7 @@ target_include_directories(miniPlayerModels PUBLIC
 target_link_libraries(miniPlayerModels PUBLIC
     Qt6::Core
     Qt6::Gui
+    Qt6::Qml
     Qt6::Network
     OpenSSL::Crypto
     miniPlayerInfrastructure
@@ -145,6 +178,7 @@ qt_add_qml_module(MeloBox
         ui/qml/components/VideoPlayerView.qml
         ui/qml/components/AnimeView.qml
         ui/qml/components/BeeView.qml
+        ui/qml/components/BookView.qml
         ui/qml/components/DanmakuOverlay.qml
         ui/qml/components/ApiManagerDialog.qml
         ui/qml/panels/MediaPanel.qml
@@ -428,6 +462,12 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/models/BeeVideoModel.cpp
             src/models/BeeScheduleModel.cpp
             src/media/BeeClient.cpp
+            src/book/BookSource.cpp
+            src/book/HtmlDom.cpp
+            src/book/RuleEngine.cpp
+            src/book/LegadoClient.cpp
+            src/models/LegadoSourceModel.cpp
+            src/models/LegadoBookModel.cpp
             src/infrastructure/Logger.cpp
         )
 
@@ -439,6 +479,7 @@ if(MELOBOX_ENABLE_FFMPEG)
             Qt6::Core
             Qt6::Gui
             Qt6::Quick
+            Qt6::Qml
             Qt6::Test
             Qt6::Multimedia
             Qt6::Widgets

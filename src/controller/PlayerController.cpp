@@ -286,6 +286,19 @@ PlayerController::PlayerController(QObject *parent)
         loadVideoList(1);
     });
 
+    // 书源（Legado 阅读规则）：选中源变化时重建书籍模型；音频章节交给播放器
+    legadoBookModel_.setSourceModel(&legadoSourceModel_);
+    connect(&legadoSourceModel_, &LegadoSourceModel::activeSourceChanged, this, [this]() {
+        legadoBookModel_.applyActiveSource();
+    });
+    connect(&legadoBookModel_, &LegadoBookModel::playbackRequested, this,
+        [this](const QString &url, const QString &title) {
+            setCurrentVodName(title);
+            playVodUrl(url);
+        });
+    if (legadoSourceModel_.hasSelected())
+        legadoBookModel_.applyActiveSource();
+
     wireEngineSignals();
     loadSettings();
     QTimer::singleShot(0, this, [this]() {
@@ -1162,6 +1175,8 @@ DmghgAnimeModel *PlayerController::dmghgAnimeModel() { return &dmghgAnimeModel_;
 BeeVideoModel *PlayerController::beeVideoModel() { return &beeVideoModel_; }
 BeeScheduleModel *PlayerController::beeScheduleModel() { return &beeScheduleModel_; }
 DownloadModel *PlayerController::downloadModel() { return &downloadModel_; }
+LegadoSourceModel *PlayerController::legadoSourceModel() { return &legadoSourceModel_; }
+LegadoBookModel *PlayerController::legadoBookModel() { return &legadoBookModel_; }
 
 void PlayerController::searchCurrentVodOnSite(int siteIndex) {
     if (currentVodName_.trimmed().isEmpty()) {

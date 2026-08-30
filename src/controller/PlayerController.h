@@ -19,6 +19,8 @@
 #include "models/BeeVideoModel.h"
 #include "models/BeeScheduleModel.h"
 #include "models/DownloadModel.h"
+#include "models/LegadoSourceModel.h"
+#include "models/LegadoBookModel.h"
 #include "mpv/MpvBackend.h"
 #include "media/ImageCacheService.h"
 
@@ -75,6 +77,8 @@ public:
     Q_PROPERTY(BeeVideoModel *beeVideoModel READ beeVideoModel CONSTANT)
     Q_PROPERTY(BeeScheduleModel *beeScheduleModel READ beeScheduleModel CONSTANT)
     Q_PROPERTY(DownloadModel *downloadModel READ downloadModel CONSTANT)
+    Q_PROPERTY(LegadoSourceModel *legadoSourceModel READ legadoSourceModel CONSTANT)
+    Q_PROPERTY(LegadoBookModel *legadoBookModel READ legadoBookModel CONSTANT)
     Q_PROPERTY(QString currentVodName READ currentVodName NOTIFY currentVodNameChanged)
     Q_PROPERTY(bool imageLoading READ imageLoading NOTIFY imageStateChanged)
     Q_PROPERTY(QString currentImageUrl READ currentImageUrl NOTIFY imageStateChanged)
@@ -158,6 +162,8 @@ public:
     BeeVideoModel *beeVideoModel();
     BeeScheduleModel *beeScheduleModel();
     DownloadModel *downloadModel();
+    LegadoSourceModel *legadoSourceModel();
+    LegadoBookModel *legadoBookModel();
     QString currentVodName() const;
     bool imageLoading() const;
     QString currentImageUrl() const;
@@ -331,6 +337,8 @@ private:
     BeeVideoModel beeVideoModel_;
     BeeScheduleModel beeScheduleModel_;
     DownloadModel downloadModel_;
+    LegadoSourceModel legadoSourceModel_;
+    LegadoBookModel legadoBookModel_;
     ImageCacheService imageCache_;
     MpvBackend mpvBackend_;
     QMediaPlayer *qtPlayer_ = nullptr;

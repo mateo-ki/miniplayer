@@ -98,6 +98,7 @@ ApplicationWindow {
     onDanmakuFontScaleChanged: saveUiSetting("danmakuFontScale", danmakuFontScale)
     onDanmakuEnabledChanged: saveUiSetting("danmakuEnabled", danmakuEnabled)
     property bool beePlaybackActive: false
+    property bool bookPlaybackActive: false
     property bool playerPageActive: sidebar.currentIndex === 1 || sidebar.currentIndex === 6
     property bool videoBrowserVisible: sidebar.currentIndex === 1 && videoBrowserActive
     property bool shortVideoPlaybackActive: sidebar.currentIndex === 6
@@ -260,7 +261,7 @@ ApplicationWindow {
         // 旧版页面 0 是首页。首页移除后，将旧设置迁移到视频页。
         if (savedPage === 0)
             savedPage = 1
-        sidebar.currentIndex = Math.max(1, Math.min(12, savedPage))
+        sidebar.currentIndex = Math.max(1, Math.min(13, savedPage))
         restoringUiSettings = false
 
         // 弹幕设置(与 videoFillMode 同款持久化)。
@@ -1184,6 +1185,24 @@ ApplicationWindow {
                     window.videoBrowserActive = false
                     window.bottomControlReveal = false
                     sidebar.activePageOverride = 12
+                }
+            }
+
+            // Page 13: 阅读（Legado 书源）
+            BookView {
+                id: bookPage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                controller: playerController
+                theme: appTheme
+                sidebar: sidebar
+                onPlaybackRequested: {
+                    window.bookPlaybackActive = true
+                    window.videoBrowserActive = false
+                    window.bottomControlReveal = false
+                    sidebar.activePageOverride = 13
+                    // 听书切到播放器页展示控制条
+                    sidebar.currentIndex = 1
                 }
             }
         }

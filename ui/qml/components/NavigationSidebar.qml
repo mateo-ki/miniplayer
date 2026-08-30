@@ -17,6 +17,7 @@ Rectangle {
         { icon: "\u25b6", label: "\u89c6\u9891", page: 1 },
         { icon: "🎞", label: "\u52a8\u6f2b", page: 11 },
         { icon: "🐝", label: "\u871c\u8702", page: 12 },
+        { icon: "📖", label: "\u9605\u8bfb", page: 13 },
         { icon: "\u25a6", label: "\u77ed\u89c6\u9891", page: 6 },
         { icon: "\u25ce", label: "\u8d44\u8baf", page: 8 },
         { icon: "\u25a1", label: "\u56fe\u7247", page: 4 },
