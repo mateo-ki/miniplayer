@@ -15,11 +15,15 @@
 #include "models/RuntimeLogModel.h"
 #include "models/VideoSearchModel.h"
 #include "models/ApiSiteModel.h"
+#include "models/DmghgAnimeModel.h"
+#include "models/BeeVideoModel.h"
+#include "models/BeeScheduleModel.h"
 #include "models/DownloadModel.h"
 #include "mpv/MpvBackend.h"
 #include "media/ImageCacheService.h"
 
 class VideoFrameBridge;
+class HlsPlaylistProxy;
 class QAudioOutput;
 class QMediaPlayer;
 class QNetworkReply;
@@ -67,6 +71,9 @@ public:
     Q_PROPERTY(VideoSearchModel *detailSearchModel READ detailSearchModel CONSTANT)
     Q_PROPERTY(VideoSearchModel *sourceSearchModel READ sourceSearchModel CONSTANT)
     Q_PROPERTY(ApiSiteModel *apiSiteModel READ apiSiteModel CONSTANT)
+    Q_PROPERTY(DmghgAnimeModel *dmghgAnimeModel READ dmghgAnimeModel CONSTANT)
+    Q_PROPERTY(BeeVideoModel *beeVideoModel READ beeVideoModel CONSTANT)
+    Q_PROPERTY(BeeScheduleModel *beeScheduleModel READ beeScheduleModel CONSTANT)
     Q_PROPERTY(DownloadModel *downloadModel READ downloadModel CONSTANT)
     Q_PROPERTY(QString currentVodName READ currentVodName NOTIFY currentVodNameChanged)
     Q_PROPERTY(bool imageLoading READ imageLoading NOTIFY imageStateChanged)
@@ -147,6 +154,9 @@ public:
     VideoSearchModel *detailSearchModel();
     VideoSearchModel *sourceSearchModel();
     ApiSiteModel *apiSiteModel();
+    DmghgAnimeModel *dmghgAnimeModel();
+    BeeVideoModel *beeVideoModel();
+    BeeScheduleModel *beeScheduleModel();
     DownloadModel *downloadModel();
     QString currentVodName() const;
     bool imageLoading() const;
@@ -291,6 +301,7 @@ signals:
     void thumbnailReadyForProvider(const QString &key, const QImage &image);
     void subtitlesEnabledChanged();
     void currentVodNameChanged();
+    void playlistEpisodeRequested(int index, const QString &title);
     void playbackEnded();
     void playbackFailed(const QString &message);
     void imageStateChanged();
@@ -316,6 +327,9 @@ private:
     VideoSearchModel detailSearchModel_;
     VideoSearchModel sourceSearchModel_;
     ApiSiteModel apiSiteModel_;
+    DmghgAnimeModel dmghgAnimeModel_;
+    BeeVideoModel beeVideoModel_;
+    BeeScheduleModel beeScheduleModel_;
     DownloadModel downloadModel_;
     ImageCacheService imageCache_;
     MpvBackend mpvBackend_;
@@ -326,8 +340,8 @@ private:
     QTimer *playbackLoadGuardTimer_ = nullptr;
     QTimer *cursorResetTimer_ = nullptr;
     QTimer *firstFrameTimer_ = nullptr;
-    QTimer *stallTimer_ = nullptr;
     QPointer<QNetworkReply> hlsFilterReply_;
+    HlsPlaylistProxy *hlsPlaylistProxy_ = nullptr;
     QWindow *mpvParentWindow_ = nullptr;
     QWindow *mpvVideoWindow_ = nullptr;
     bool mpvSurfaceVisible_ = true;
@@ -370,6 +384,11 @@ private:
     QString memeMessage_;
     QString currentShortVideoUrl_;
     QString shortVideoMessage_;
+    QString suspendedVideoUrl_;
+    qint64 suspendedVideoPositionMs_ = 0;
+    bool suspendedVideoWasPlaying_ = false;
+    bool suspendedVideoWasPaused_ = false;
+    bool suspendedVideoRestorePending_ = false;
     QString currentVoiceUrl_;
     QString currentVoiceFilePath_;
     QString voiceMessage_;
@@ -429,6 +448,10 @@ private:
     void saveSettings();
     void recordPlaybackHistory(const QString &filePath, const QString &title);
     void setImageState(bool loading, const QString &url, const QString &message, const QString &displayUrl = QString());
+    static QString localImageFileUrl(const QString &path);
+    bool loadImageBytesFromLocalUrl(const QString &url);
+    QString cacheImageBytes(const QString &apiUrl, const QString &sourceUrl,
+                            const QByteArray &bytes, const QString &mimeType);
     void saveImageBytes(const QByteArray &bytes, const QUrl &sourceUrl, const QString &contentType);
     static QString extractImageUrlFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType);
     static QStringList extractImageUrlsFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType);
@@ -448,4 +471,7 @@ private:
     void clearSourceSwitchSuggestion();
     void armFirstFrameDetection();
     void markPlaybackProgress();
+    void suspendCurrentVideoForShortVideo();
+    void restoreSuspendedVideoAfterShortVideo();
+    void applyPendingSuspendedVideoState();
 };

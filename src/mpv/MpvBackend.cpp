@@ -116,8 +116,9 @@ bool MpvBackend::initialize() {
     mpv_set_option_string_(handle_, "cache-pause", "yes");
     mpv_set_option_string_(handle_, "cache-pause-initial", "yes");
     mpv_set_option_string_(handle_, "cache-pause-wait", "3");
-    mpv_set_option_string_(handle_, "demuxer-max-bytes", "256MiB");
-    mpv_set_option_string_(handle_, "demuxer-readahead-secs", "45");
+    mpv_set_option_string_(handle_, "cache-secs", "180");
+    mpv_set_option_string_(handle_, "demuxer-max-bytes", "512MiB");
+    mpv_set_option_string_(handle_, "demuxer-readahead-secs", "180");
     mpv_set_option_string_(handle_, "hr-seek", "yes");
 
     if (pendingWindowId_ > 0) {

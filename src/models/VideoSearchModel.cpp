@@ -13,6 +13,7 @@
 #include <utility>
 
 namespace {
+constexpr int kVideoPageSize = 20;
 QString jsonValueToString(const QJsonValue &value) {
     if (value.isString()) return value.toString();
     if (value.isDouble()) return QString::number(value.toInt());
@@ -245,7 +246,8 @@ void VideoSearchModel::search(const QString &baseUrl, const QString &keyword, in
         return;
     }
 
-    QString url = baseUrl + "?ac=detail&wd=" + QUrl::toPercentEncoding(keyword) + "&pg=" + QString::number(page);
+    QString url = baseUrl + "?ac=detail&wd=" + QUrl::toPercentEncoding(keyword)
+        + "&pg=" + QString::number(page) + "&limit=" + QString::number(kVideoPageSize);
     auto *reply = nam_.get(makeRequest(url));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, page, requestSerial, baseUrl, append, key]() {
@@ -320,7 +322,8 @@ void VideoSearchModel::loadList(const QString &baseUrl, int page, const QString 
         return;
     }
 
-    QString url = baseUrl + "?ac=list&pg=" + QString::number(page);
+    QString url = baseUrl + "?ac=list&pg=" + QString::number(page)
+        + "&limit=" + QString::number(kVideoPageSize);
     if (!trimmedTypeId.isEmpty()) {
         url += "&t=" + QUrl::toPercentEncoding(trimmedTypeId);
     }
@@ -527,6 +530,7 @@ void VideoSearchModel::parseListResponse(const QJsonDocument &doc, const QString
             QVariantMap category;
             category[QStringLiteral("typeId")] = jsonValueToString(obj.value(QStringLiteral("type_id")));
             category[QStringLiteral("typeName")] = obj.value(QStringLiteral("type_name")).toString();
+            category[QStringLiteral("parentTypeId")] = jsonValueToString(obj.value(QStringLiteral("type_pid")));
             if (!category.value(QStringLiteral("typeId")).toString().isEmpty()
                 && !category.value(QStringLiteral("typeName")).toString().isEmpty()) {
                 newCategories.append(category);

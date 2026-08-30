@@ -1,125 +1,139 @@
 #include "media/HlsPlaylistFilter.h"
 
-#include <QHash>
 #include <QRegularExpression>
-#include <QSet>
 #include <QStringList>
+#include <QUrl>
 #include <QVector>
 
-#include <limits>
-
 namespace {
-struct SegmentInfo {
-    int uriLine = -1;
-    int startLine = -1;
-    QString key;
+struct SegmentSequence {
+    QString prefix;
     qint64 number = -1;
-    bool discontinuityBefore = false;
 };
 
-QString absoluteUrl(const QString &value, const QUrl &playlistUrl) {
-    const QString trimmed = value.trimmed();
-    if (trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#')))
-        return trimmed;
-    return playlistUrl.resolved(QUrl(trimmed)).toString();
-}
-
-QString rewriteTagUris(const QString &line, const QUrl &playlistUrl) {
-    static const QRegularExpression uriAttribute(QStringLiteral("URI=\\\"([^\\\"]+)\\\""));
-    QString result = line;
-    int offset = 0;
-    while (true) {
-        const auto match = uriAttribute.match(result, offset);
-        if (!match.hasMatch())
-            break;
-        const QString resolved = absoluteUrl(match.captured(1), playlistUrl);
-        const int valueStart = match.capturedStart(1);
-        result.replace(valueStart, match.capturedLength(1), resolved);
-        offset = valueStart + resolved.size();
-    }
-    return result;
-}
-
-bool parseSegment(const QString &line, QString *key, qint64 *number) {
-    QString path = QUrl(line.trimmed()).path();
+bool parseSegmentSequence(const QString &value, SegmentSequence *sequence) {
+    QString path = QUrl(value.trimmed()).path();
     if (path.isEmpty())
-        path = line.trimmed().section('?', 0, 0).section('#', 0, 0);
+        path = value.trimmed().section('?', 0, 0).section('#', 0, 0);
     const QString fileName = path.section('/', -1);
-    static const QRegularExpression numberedName(QStringLiteral("^(.*?)([0-9]{2,})(\\.[^./]+)$"));
+    static const QRegularExpression numberedName(QStringLiteral("^(.*?)([0-9]+)(\\.[^./]+)$"));
     const auto match = numberedName.match(fileName);
     if (!match.hasMatch())
         return false;
+
     bool ok = false;
-    const qint64 parsedNumber = match.captured(2).toLongLong(&ok);
+    const qint64 number = match.captured(2).toLongLong(&ok);
     if (!ok)
         return false;
-    *key = match.captured(1) + match.captured(3);
-    *number = parsedNumber;
+
+    sequence->prefix = match.captured(1);
+    sequence->number = number;
     return true;
+}
+
+QVector<SegmentSequence> segmentSequences(const QStringList &lines) {
+    QVector<SegmentSequence> sequences;
+    bool expectsSegment = false;
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("#EXTINF:"))) {
+            expectsSegment = true;
+            continue;
+        }
+        if (!expectsSegment || trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#')))
+            continue;
+
+        expectsSegment = false;
+        SegmentSequence sequence;
+        if (parseSegmentSequence(trimmed, &sequence))
+            sequences.append(sequence);
+    }
+    return sequences;
+}
+
+int segmentCount(const QStringList &lines) {
+    int count = 0;
+    bool expectsSegment = false;
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("#EXTINF:"))) {
+            expectsSegment = true;
+            continue;
+        }
+        if (!expectsSegment || trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#')))
+            continue;
+        expectsSegment = false;
+        ++count;
+    }
+    return count;
+}
+
+bool isLargeSequenceJump(qint64 previous, qint64 current) {
+    const qint64 minimumJump = qBound<qint64>(qint64(100), previous / 10, qint64(10000));
+    return qAbs(previous - current) >= minimumJump;
+}
+
+bool continuesSequence(const SegmentSequence &previous, const SegmentSequence &current) {
+    if (previous.prefix != current.prefix || current.number <= previous.number)
+        return false;
+    return current.number - previous.number <= 100;
 }
 }
 
 HlsPlaylistFilterResult HlsPlaylistFilter::filterOutOfSequenceAds(const QString &playlist,
-                                                                   const QUrl &playlistUrl) {
-    QStringList lines = playlist.split(QRegularExpression(QStringLiteral("\\r?\\n")));
-    QVector<SegmentInfo> segments;
-    bool hasExtInf = false;
-    bool discontinuitySinceLastSegment = false;
-    int pendingStart = -1;
-
-    for (int i = 0; i < lines.size(); ++i) {
-        const QString trimmed = lines[i].trimmed();
-        if (trimmed.startsWith(QStringLiteral("#EXT-X-DISCONTINUITY"))) {
-            discontinuitySinceLastSegment = true;
-            continue;
-        }
-        if (trimmed.startsWith(QStringLiteral("#EXTINF:"))) {
-            hasExtInf = true;
-            pendingStart = i;
-            continue;
-        }
-        if (trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#')))
-            continue;
-
-        QString key;
-        qint64 number = -1;
-        if (pendingStart >= 0 && parseSegment(trimmed, &key, &number)) {
-            segments.append({i, pendingStart, key, number, discontinuitySinceLastSegment});
-        }
-        pendingStart = -1;
-    }
-
-    if (!hasExtInf || segments.isEmpty())
+                                                                   const QUrl &) {
+    if (!playlist.contains(QStringLiteral("#EXT-X-DISCONTINUITY")))
         return {playlist, 0};
 
-    QHash<QString, QVector<int>> groups;
-    for (int i = 0; i < segments.size(); ++i)
-        groups[segments[i].key].append(i);
+    const QStringList lines = playlist.split(QRegularExpression(QStringLiteral("\\r?\\n")));
+    QVector<QStringList> sections(1);
+    for (const QString &line : lines) {
+        if (line.trimmed() == QStringLiteral("#EXT-X-DISCONTINUITY"))
+            sections.append(QStringList());
+        else
+            sections.last().append(line);
+    }
 
-    QSet<int> skippedLines;
+    QVector<QStringList> accepted;
+    SegmentSequence lastAccepted;
+    bool hasLastAccepted = false;
     int skippedSegments = 0;
-    for (auto it = groups.cbegin(); it != groups.cend(); ++it) {
-        const auto &indices = it.value();
-        if (indices.size() < 3)
-            continue;
 
-        qint64 minimum = std::numeric_limits<qint64>::max();
-        qint64 maximum = 0;
-        for (const int index : indices) {
-            minimum = qMin(minimum, segments[index].number);
-            maximum = qMax(maximum, segments[index].number);
+    QVector<QVector<SegmentSequence>> sectionSequences;
+    sectionSequences.reserve(sections.size());
+    for (const QStringList &section : sections)
+        sectionSequences.append(segmentSequences(section));
+
+    for (int sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex) {
+        const QStringList &section = sections[sectionIndex];
+        const auto &sequences = sectionSequences[sectionIndex];
+        const bool outOfSequence = !sequences.isEmpty()
+            && hasLastAccepted
+            && sequences.first().prefix == lastAccepted.prefix
+            && isLargeSequenceJump(lastAccepted.number, sequences.first().number);
+
+        bool interruptsRecoverableSequence = false;
+        if (!sequences.isEmpty() && hasLastAccepted
+            && !continuesSequence(lastAccepted, sequences.first())) {
+            for (int nextIndex = sectionIndex + 1; nextIndex < sections.size(); ++nextIndex) {
+                const auto &nextSequences = sectionSequences[nextIndex];
+                if (nextSequences.isEmpty())
+                    continue;
+                interruptsRecoverableSequence = continuesSequence(lastAccepted,
+                                                                    nextSequences.first());
+                break;
+            }
         }
-        if (maximum < 1000 || maximum - minimum < 10000)
-            continue;
 
-        const qint64 lowCutoff = maximum / 100;
-        for (const int index : indices) {
-            const auto &segment = segments[index];
-            if (segment.number > lowCutoff || !segment.discontinuityBefore)
-                continue;
-            for (int line = segment.startLine; line <= segment.uriLine; ++line)
-                skippedLines.insert(line);
-            ++skippedSegments;
+        if (outOfSequence || interruptsRecoverableSequence) {
+            skippedSegments += segmentCount(section);
+            continue;
+        }
+
+        accepted.append(section);
+        if (!sequences.isEmpty()) {
+            lastAccepted = sequences.last();
+            hasLastAccepted = true;
         }
     }
 
@@ -127,17 +141,14 @@ HlsPlaylistFilterResult HlsPlaylistFilter::filterOutOfSequenceAds(const QString 
         return {playlist, 0};
 
     QStringList filtered;
-    filtered.reserve(lines.size());
-    for (int i = 0; i < lines.size(); ++i) {
-        if (skippedLines.contains(i))
-            continue;
-        const QString trimmed = lines[i].trimmed();
-        if (trimmed.startsWith(QLatin1Char('#')))
-            filtered.append(rewriteTagUris(trimmed, playlistUrl));
-        else if (!trimmed.isEmpty())
-            filtered.append(absoluteUrl(trimmed, playlistUrl));
-        else
-            filtered.append(QString());
+    for (int index = 0; index < accepted.size(); ++index) {
+        if (index > 0)
+            filtered.append(QStringLiteral("#EXT-X-DISCONTINUITY"));
+        filtered.append(accepted[index]);
+    }
+    if (lines.contains(QStringLiteral("#EXT-X-ENDLIST"))
+        && !filtered.contains(QStringLiteral("#EXT-X-ENDLIST"))) {
+        filtered.append(QStringLiteral("#EXT-X-ENDLIST"));
     }
     return {filtered.join(QLatin1Char('\n')), skippedSegments};
 }

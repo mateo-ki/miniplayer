@@ -22,6 +22,7 @@ Rectangle {
     property var apiSiteModel
     property var sourceSearchModel
     property string currentVodName: ""
+    signal playlistItemRequested(int index, string filePath, string title)
     property int sourceSiteIndex: -1
 
     function episodeCountFromPlayUrl(playUrl) {
@@ -89,7 +90,18 @@ Rectangle {
     function open() {
         isOpen = true
         autoHideTimer.restart()
+        scrollToCurrentEpisode()
     }
+
+    function scrollToCurrentEpisode() {
+        if (drawerMode !== "playlist" || currentIndex < 0)
+            return
+        Qt.callLater(function() {
+            playlistView.positionViewAtIndex(currentIndex, ListView.Center)
+        })
+    }
+
+    onCurrentIndexChanged: scrollToCurrentEpisode()
 
     function close() {
         isOpen = false
@@ -644,6 +656,7 @@ Rectangle {
                 anchors.topMargin: sourceSwitcher.height + 10
                 spacing: 2
                 clip: true
+                boundsBehavior: Flickable.StopAtBounds
                 model: root.playlistModel
                 displaced: Transition {
                     NumberAnimation { properties: "x,y"; duration: 200 }
@@ -664,10 +677,10 @@ Rectangle {
 
                     MouseArea {
                         anchors.fill: parent
+                        preventStealing: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            root.currentIndex = index
-                            playerController.playFromPlaylist(index)
+                            root.playlistItemRequested(index, filePath, title)
                             autoHideTimer.restart()
                         }
                     }

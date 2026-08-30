@@ -25,15 +25,35 @@ Rectangle {
     signal seekRequested(real value)
     signal volumeRequested(real value)
     signal playlistRequested()
+    signal commentsRequested()
     signal downloadRequested()
     signal fullScreenToggleRequested()
     signal playbackRateChangeRequested(real rate)
     signal repeatModeChangeRequested(int mode)
     signal thumbnailRequested(real positionMs)
+    signal danmakuRequested()
+    signal danmakuSettingsRequested()
+    signal danmakuOpacityRequested(real value)
+    signal danmakuDisplayModeRequested(int mode)
+    signal danmakuFontScaleRequested(real value)
 
     function closePopups() {
         volumeWindow.hide()
         volumeAutoHideTimer.stop()
+        danmakuSettingsWindow.hide()
+    }
+
+    function openDanmakuSettings(point) {
+        if (point) {
+            var parentWindow = root.Window.window
+            danmakuSettingsWindow.x = parentWindow.x + point.x + (root.width - danmakuSettingsWindow.width) / 2
+            danmakuSettingsWindow.y = parentWindow.y + point.y - danmakuSettingsWindow.height - 10
+        } else {
+            danmakuSettingsWindow.showAt()
+        }
+        danmakuSettingsWindow.show()
+        danmakuSettingsWindow.raise()
+        danmakuSettingsWindow.requestActivate()
     }
 
     function keepVolumePopupOpen() {
@@ -45,6 +65,16 @@ Rectangle {
     property int repeatMode: 0
     property bool drawerOpen: false
     property bool playlistOpen: false
+    property bool commentsAvailable: false
+    property bool commentsOpen: false
+    property bool danmakuAvailable: false
+    property bool danmakuEnabled: false
+    // 绑定到弹窗可见性:设置弹窗打开时,通知 Main.qml 的控制条自动隐藏
+    // 守卫放过它(否则鼠标移出控制条热区去够弹窗,控制条会连带弹窗一起被关闭)。
+    property bool danmakuSettingsOpen: danmakuSettingsWindow.visible
+    property real danmakuOpacityValue: 0.85
+    property int danmakuDisplayModeValue: 0
+    property real danmakuFontScaleValue: 1.0
     property bool seeking: false
     property real seekTarget: 0
     property var thumbnailImage: null
@@ -64,8 +94,8 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 6
+        anchors.margins: 5
+        spacing: 4
 
         RowLayout {
             spacing: 10
@@ -265,7 +295,7 @@ Rectangle {
 
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: 38
+            Layout.preferredHeight: 34
 
             RowLayout {
                 anchors.centerIn: parent
@@ -281,7 +311,7 @@ Rectangle {
                 Rectangle {
                     id: volumeButton
                     Layout.preferredWidth: 48
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: 34
                     radius: theme ? theme.controlRadius : 10
                     color: volumeWindow.visible
                         ? (theme ? theme.accentMutedColor : "#7a4a17")
@@ -327,7 +357,7 @@ Rectangle {
 
                 ToolButton {
                     Layout.preferredWidth: 48
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: 34
                     onClicked: root.playlistRequested()
 
                     background: Rectangle {
@@ -350,10 +380,36 @@ Rectangle {
                         font.pixelSize: 17
                     }
                 }
+                ToolButton {
+                    Layout.preferredWidth: 48
+                    Layout.preferredHeight: 34
+                    visible: root.commentsAvailable
+                    onClicked: root.commentsRequested()
+
+                    background: Rectangle {
+                        radius: root.theme ? root.theme.controlRadius : 10
+                        color: root.commentsOpen
+                            ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                            : (root.theme ? root.theme.panelColor : "#1c1c1c")
+                        border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
+                        border.width: 1
+                    }
+
+                    contentItem: Text {
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        color: root.commentsOpen
+                            ? (root.theme ? root.theme.accentColor : "#f28c28")
+                            : (root.theme ? root.theme.textSecondaryColor : "#bebebe")
+                        text: ""
+                        font.family: "Segoe Fluent Icons"
+                        font.pixelSize: 17
+                    }
+                }
 
                 ToolButton {
                     Layout.preferredWidth: 42
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: 34
                     enabled: !root.emptyState
                     opacity: enabled ? 1.0 : 0.3
                     onClicked: root.togglePlayPause()
@@ -375,9 +431,49 @@ Rectangle {
                     }
                 }
 
+
+
+                // 弹幕开关(仅动漫播放时可见)。
                 ToolButton {
                     Layout.preferredWidth: 48
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: 34
+                    visible: root.danmakuAvailable
+                    onClicked: {
+                        if (danmakuSettingsWindow.visible)
+                            danmakuSettingsWindow.hide()
+                        else
+                            root.danmakuRequested()
+                    }
+                    onPressAndHold: root.danmakuSettingsRequested()
+
+                    background: Rectangle {
+                        radius: root.theme ? root.theme.controlRadius : 10
+                        color: root.danmakuEnabled
+                            ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                            : (root.theme ? root.theme.panelColor : "#1c1c1c")
+                        border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
+                        border.width: 1
+                    }
+
+                    contentItem: Text {
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        color: root.danmakuEnabled
+                            ? (root.theme ? root.theme.accentColor : "#f28c28")
+                            : (root.theme ? root.theme.textSecondaryColor : "#bebebe")
+                        text: "弹"
+                        font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+
+                    ToolTip.visible: hovered
+                    ToolTip.text: root.danmakuEnabled ? "弹幕开(长按设置)" : "弹幕关(长按设置)"
+                }
+
+                ToolButton {
+                    Layout.preferredWidth: 48
+                    Layout.preferredHeight: 34
                     enabled: !root.emptyState
                     opacity: enabled ? 1.0 : 0.3
                     onClicked: {
@@ -411,7 +507,7 @@ Rectangle {
 
                 ToolButton {
                     Layout.preferredWidth: 48
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: 34
                     enabled: !root.emptyState
                     opacity: enabled ? 1.0 : 0.3
                     onClicked: root.fullScreenToggleRequested()
@@ -555,6 +651,131 @@ Rectangle {
                 restart()
             else
                 volumeWindow.hide()
+        }
+    }
+
+    // 弹幕设置弹窗:透明度/模式/字号。沿用 volumeWindow 的顶层 Tool 窗口 idiom。
+    Window {
+        id: danmakuSettingsWindow
+        width: 220
+        height: 230
+        flags: Qt.Tool | Qt.FramelessWindowHint
+        transientParent: root.Window.window
+        color: "transparent"
+        visible: false
+        onVisibleChanged: if (visible) raise()
+
+        function showAt() {
+            var point = root.mapToItem(null, 0, 0)
+            var parentWindow = root.Window.window
+            x = parentWindow.x + point.x + (root.width - width) / 2
+            y = parentWindow.y + point.y - height - 10
+            show()
+            raise()
+            requestActivate()
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            radius: root.theme ? root.theme.controlRadius : 10
+            color: root.theme ? root.theme.panelColor : "#1c1c1c"
+            border.color: root.theme ? root.theme.subtleBorderColor : "#282828"
+            border.width: 1
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "弹幕设置"
+                    color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: root.theme ? root.theme.bodySize : 13
+                    font.bold: true
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "透明度 " + Math.round(danmakuOpacitySlider.value * 100) + "%"
+                    color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: root.theme ? root.theme.captionSize : 11
+                }
+                Slider {
+                    id: danmakuOpacitySlider
+                    Layout.fillWidth: true
+                    from: 0.1
+                    to: 1.0
+                    value: root.danmakuOpacityValue
+                    stepSize: 0.05
+                    onMoved: root.danmakuOpacityRequested(value)
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "显示模式"
+                    color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: root.theme ? root.theme.captionSize : 11
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: [
+                            { label: "全部", mode: 0 },
+                            { label: "滚动", mode: 1 },
+                            { label: "顶部", mode: 2 },
+                            { label: "底部", mode: 3 }
+                        ]
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            radius: root.theme ? root.theme.controlRadius : 8
+                            color: root.danmakuDisplayModeValue === modelData.mode
+                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                : (root.theme ? root.theme.surfaceColor : "#0b0f15")
+                            border.color: root.danmakuDisplayModeValue === modelData.mode
+                                ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                : (root.theme ? root.theme.subtleBorderColor : "#282828")
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: root.danmakuDisplayModeValue === modelData.mode
+                                    ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                    : (root.theme ? root.theme.textSecondaryColor : "#bebebe")
+                                font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.danmakuDisplayModeRequested(modelData.mode)
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "字号 " + danmakuFontScaleSlider.value.toFixed(1) + "x"
+                    color: root.theme ? root.theme.textSecondaryColor : "#bebebe"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: root.theme ? root.theme.captionSize : 11
+                }
+                Slider {
+                    id: danmakuFontScaleSlider
+                    Layout.fillWidth: true
+                    from: 0.6
+                    to: 2.0
+                    value: root.danmakuFontScaleValue
+                    stepSize: 0.1
+                    onMoved: root.danmakuFontScaleRequested(value)
+                }
+            }
         }
     }
 }

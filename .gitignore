@@ -12,9 +12,12 @@ build-*/
 *.lib
 *.exp
 *.log
+dist
+androguard.db
 third_party/mpv/*.7z
 third_party/mpv/*.json
 .superpowers/
 .worktrees/
+.tmp-dmghg-diag/
 compile_commands.json
 CMakeUserPresets.json

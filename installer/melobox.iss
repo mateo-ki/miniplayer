@@ -1,16 +1,54 @@
 #define AppName "MeloBox"
-#define AppVersion "1.0"
+#ifndef AppVersion
+  #define AppVersion "1.0"
+#endif
 #define SourceDir "..\dist\MeloBox"
 #define OutputDir "..\dist\installer"
 
 #ifnexist SourceDir + "\MeloBox.exe"
   #error "Missing MeloBox.exe in dist\MeloBox. Build and stage Release files before compiling installer."
 #endif
+#ifnexist SourceDir + "\libmpv-2.dll"
+  #error "Missing libmpv-2.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\Qt6Core.dll"
+  #error "Missing Qt6Core.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\Qt6Gui.dll"
+  #error "Missing Qt6Gui.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\Qt6Network.dll"
+  #error "Missing Qt6Network.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\Qt6Qml.dll"
+  #error "Missing Qt6Qml.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
 #ifnexist SourceDir + "\Qt6Quick.dll"
   #error "Missing Qt6Quick.dll in dist\MeloBox. Run deployment staging before compiling installer."
 #endif
 #ifnexist SourceDir + "\Qt6Multimedia.dll"
   #error "Missing Qt6Multimedia.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\Qt6Widgets.dll"
+  #error "Missing Qt6Widgets.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\platforms\qwindows.dll"
+  #error "Missing platforms\qwindows.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\tls\qschannelbackend.dll"
+  #error "Missing tls\qschannelbackend.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\networkinformation\qnetworklistmanager.dll"
+  #error "Missing networkinformation\qnetworklistmanager.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\multimedia\windowsmediaplugin.dll"
+  #error "Missing multimedia\windowsmediaplugin.dll in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\qml\QtQuick\qmldir"
+  #error "Missing QtQuick QML runtime in dist\MeloBox. Run deployment staging before compiling installer."
+#endif
+#ifnexist SourceDir + "\qml\QtQuick\Controls\qmldir"
+  #error "Missing Qt Quick Controls runtime in dist\MeloBox. Run deployment staging before compiling installer."
 #endif
 #ifnexist SourceDir + "\brotlicommon.dll"
   #error "Missing brotlicommon.dll in dist\MeloBox. Run deployment staging before compiling installer."
@@ -64,19 +102,21 @@ UninstallDisplayIcon={app}\MeloBox.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："; Flags: unchecked
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.lib,*.exp,*.pdb,*Tests.exe,gtest*.dll,gmock*.dll,*.log,miniPlayer.exe"
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.lib,*.exp,*.pdb,*Tests.exe,gtest*.dll,gmock*.dll,*.log,miniPlayer.exe,*smoke*.txt"
 
 [Icons]
 Name: "{group}\MeloBox"; Filename: "{app}\MeloBox.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\MeloBox"; Filename: "{app}\MeloBox.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\MeloBox.exe"; Description: "启动 MeloBox"; Flags: nowait postinstall
+Filename: "{app}\MeloBox.exe"; Description: "启动 MeloBox"; Flags: nowait postinstall skipifsilent

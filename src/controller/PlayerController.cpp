@@ -43,6 +43,7 @@
 
 #include "infrastructure/Logger.h"
 #include "media/HlsPlaylistFilter.h"
+#include "media/HlsPlaylistProxy.h"
 #include "render/VideoFrameBridge.h"
 
 #ifndef MELOBOX_APP_VERSION
@@ -141,9 +142,7 @@ PlayerController::PlayerController(QObject *parent)
     firstFrameTimer_ = new QTimer(this);
     firstFrameTimer_->setSingleShot(true);
     firstFrameTimer_->setInterval(10000);
-    stallTimer_ = new QTimer(this);
-    stallTimer_->setSingleShot(true);
-    stallTimer_->setInterval(8000);
+    hlsPlaylistProxy_ = new HlsPlaylistProxy(this);
     qtPlayer_->setAudioOutput(qtAudioOutput_);
     qtPlayer_->setVideoSink(qtVideoSink_);
     qtAudioOutput_->setVolume(volume_);
@@ -195,10 +194,6 @@ PlayerController::PlayerController(QObject *parent)
         if (mpvMode_ && positionMs_ <= 0)
             suggestSourceSwitch(QStringLiteral("首帧加载超过 10 秒"));
     });
-    connect(stallTimer_, &QTimer::timeout, this, [this]() {
-        if (mpvMode_ && mpvBuffering_ && isPlaying_)
-            suggestSourceSwitch(QStringLiteral("连续缓冲超过 8 秒"));
-    });
     connect(&mpvBackend_, &MpvBackend::positionChanged, this, [this](qint64 position) {
         if (!mpvMode_) return;
         if (pendingSeekMs_ >= 0) {
@@ -213,6 +208,7 @@ PlayerController::PlayerController(QObject *parent)
             setLoading(false);
         }
         positionMs_ = position;
+        applyPendingSuspendedVideoState();
         if (position > 0)
             markPlaybackProgress();
         emit timelineChanged();
@@ -221,6 +217,7 @@ PlayerController::PlayerController(QObject *parent)
         if (!mpvMode_) return;
         durationMs_ = duration;
         emit timelineChanged();
+        applyPendingSuspendedVideoState();
     });
     connect(&mpvBackend_, &MpvBackend::playingChanged, this, [this](bool playing) {
         if (!mpvMode_) return;
@@ -237,11 +234,6 @@ PlayerController::PlayerController(QObject *parent)
         mpvBuffering_ = buffering;
         if (!buffering || !isPlaying_) {
             setLoading(buffering);
-        }
-        if (buffering && isPlaying_ && positionMs_ > 0) {
-            stallTimer_->start();
-        } else {
-            stallTimer_->stop();
         }
     });
     connect(&mpvBackend_, &MpvBackend::cacheProgressChanged, this, [this](double progress) {
@@ -260,7 +252,6 @@ PlayerController::PlayerController(QObject *parent)
         setLoading(false);
         mpvBuffering_ = false;
         if (firstFrameTimer_) firstFrameTimer_->stop();
-        if (stallTimer_) stallTimer_->stop();
         userPausedPlayback_ = false;
         mpvPlaybackFinished_ = true;
         isPlaying_ = false;
@@ -279,7 +270,6 @@ PlayerController::PlayerController(QObject *parent)
             setLoading(false);
             mpvBuffering_ = false;
             if (firstFrameTimer_) firstFrameTimer_->stop();
-            if (stallTimer_) stallTimer_->stop();
             mpvPlaybackFinished_ = true;
             isPlaying_ = false;
             isPaused_ = false;
@@ -507,6 +497,13 @@ void PlayerController::playFromPlaylist(int index) {
     if (!playbackSources_.isEmpty())
         currentPlaybackEpisode_ = index;
 
+    // 动漫共和国的集数地址需要异步解析，列表模型先保存占位地址；
+    // 由 QML 接到信号后调用动漫模型解析真实播放地址。
+    if (path.startsWith(QStringLiteral("dmghg://"))) {
+        emit playlistEpisodeRequested(index, playlistModel_.titleAt(index));
+        return;
+    }
+
     if (currentFile_ == path) {
         Logger::instance().info("Same file already playing, ignoring playlist click");
         recordPlaybackHistory(path, playlistModel_.titleAt(index));
@@ -613,9 +610,10 @@ void PlayerController::stop() {
     cancelHlsFilterRequest();
     removeSanitizedHlsPlaylist();
     userPausedPlayback_ = false;
+    if (hlsPlaylistProxy_)
+        hlsPlaylistProxy_->stop();
     mpvBuffering_ = false;
     if (firstFrameTimer_) firstFrameTimer_->stop();
-    if (stallTimer_) stallTimer_->stop();
     if (mpvMode_) {
         mpvBackend_.stop();
         mpvMode_ = false;
@@ -1160,6 +1158,9 @@ void PlayerController::wireEngineSignals() {
 VideoSearchModel *PlayerController::videoSearchModel() { return &videoSearchModel_; }
 VideoSearchModel *PlayerController::detailSearchModel() { return &detailSearchModel_; }
 ApiSiteModel *PlayerController::apiSiteModel() { return &apiSiteModel_; }
+DmghgAnimeModel *PlayerController::dmghgAnimeModel() { return &dmghgAnimeModel_; }
+BeeVideoModel *PlayerController::beeVideoModel() { return &beeVideoModel_; }
+BeeScheduleModel *PlayerController::beeScheduleModel() { return &beeScheduleModel_; }
 DownloadModel *PlayerController::downloadModel() { return &downloadModel_; }
 
 void PlayerController::searchCurrentVodOnSite(int siteIndex) {
@@ -1286,7 +1287,6 @@ void PlayerController::preparePlaybackTarget(const QString &displayUrl) {
     durationMs_ = 0;
     mpvBufferProgress_ = 0.0;
     mpvBuffering_ = false;
-    if (stallTimer_) stallTimer_->stop();
     setLoading(true);
     emit currentFileChanged();
     emit timelineChanged();
@@ -1429,12 +1429,23 @@ void PlayerController::playVideoUrl(const QString &url) {
         .arg(durationMs_));
 
     cancelHlsFilterRequest();
+    removeSanitizedHlsPlaylist();
+    if (hlsPlaylistProxy_)
+        hlsPlaylistProxy_->stop();
     preparePlaybackTarget(trimmed);
     const QUrl parsed(trimmed);
     const bool isRemoteHls = parsed.scheme().startsWith(QStringLiteral("http"), Qt::CaseInsensitive)
         && parsed.path().endsWith(QStringLiteral(".m3u8"), Qt::CaseInsensitive);
     if (isRemoteHls) {
-        fetchAndFilterHls(trimmed, hlsRequestSerial_);
+        if (hlsPlaylistProxy_ && hlsPlaylistProxy_->start()) {
+            const QUrl localUrl = hlsPlaylistProxy_->proxyUrl(parsed);
+            Logger::instance().info(QStringLiteral("[HLS] playing through playlist proxy: %1")
+                .arg(localUrl.toString()));
+            playVideoInput(localUrl.toString(), trimmed);
+        } else {
+            Logger::instance().warn(QStringLiteral("[HLS] playlist proxy unavailable; using original URL"));
+            playVideoInput(trimmed, trimmed);
+        }
         return;
     }
     playVideoInput(trimmed, trimmed);
@@ -1511,11 +1522,9 @@ void PlayerController::resolveAndPlayUrl(const QString &url) {
 void PlayerController::setImageState(bool loading, const QString &url, const QString &message, const QString &displayUrl) {
     bool changed = false;
     const QString resolvedDisplayUrl = displayUrl.isNull() ? currentImageDisplayUrl_ : displayUrl;
-    Logger::instance().info(QStringLiteral("[ImageDebug] state loading=%1 url=%2 display=%3 message=%4")
-        .arg(loading ? QStringLiteral("true") : QStringLiteral("false"),
-             url,
-             resolvedDisplayUrl,
-             message));
+    // setImageState 由 QML 频繁触发 (imageLoading/图片源切换), display 常是 data: base64
+    // 图片, 整行记进日志会令 miniplayer.log 膨胀到上百 MB。状态变更逻辑本身无需日志佐证,
+    // 去掉这条 info, 保留真实的重定向/下载错误日志 (见下方 redirect/error)。
     if (imageLoading_ != loading) {
         imageLoading_ = loading;
         changed = true;
@@ -1543,12 +1552,15 @@ void PlayerController::showPrefetchedImage(const QString &imageUrl) {
     currentImageBytes_.clear();
     currentImageContentType_.clear();
     if (trimmed.startsWith(QStringLiteral("data:"), Qt::CaseInsensitive)) {
+        // 兼容旧预载池里的 data: 链接。
         const int separator = trimmed.indexOf(QLatin1Char(','));
         const int typeEnd = trimmed.indexOf(QLatin1Char(';'));
         if (separator > 0) {
             currentImageContentType_ = trimmed.mid(5, typeEnd > 5 ? typeEnd - 5 : separator - 5);
             currentImageBytes_ = QByteArray::fromBase64(trimmed.mid(separator + 1).toLatin1());
         }
+    } else {
+        loadImageBytesFromLocalUrl(trimmed);
     }
     setImageState(false, QStringLiteral("prefetched://image"), QStringLiteral("已从缓存池加载图片"), trimmed);
 }
@@ -1561,11 +1573,8 @@ void PlayerController::prefetchImage(const QString &apiUrl) {
     }
 
     const CachedImageEntry cached = imageCache_.take(trimmedApiUrl);
-    if (!cached.bytes.isEmpty()) {
-        const QString mime = cached.mimeType.isEmpty() ? QStringLiteral("image/png") : cached.mimeType;
-        emit imagePrefetched(trimmedApiUrl,
-            QStringLiteral("data:%1;base64,%2").arg(mime,
-                QString::fromLatin1(cached.bytes.toBase64())));
+    if (!cached.bytes.isEmpty() && !cached.localPath.isEmpty()) {
+        emit imagePrefetched(trimmedApiUrl, localImageFileUrl(cached.localPath));
         emit imageCacheChanged();
         return;
     }
@@ -1594,13 +1603,14 @@ void PlayerController::prefetchImage(const QString &apiUrl) {
         if (contentType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)) {
             nam->deleteLater();
             const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
-            imageCache_.put(trimmedApiUrl, reply->url().toString(), bytes,
-                mime.isEmpty() ? QStringLiteral("image/png") : mime);
+            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
+            const QString localPath = cacheImageBytes(trimmedApiUrl, reply->url().toString(), bytes, effectiveMime);
             emit imageCacheChanged();
             emit imagePrefetched(trimmedApiUrl,
-                QStringLiteral("data:%1;base64,%2").arg(
-                    mime.isEmpty() ? QStringLiteral("image/png") : mime,
-                    QString::fromLatin1(bytes.toBase64())));
+                localPath.isEmpty()
+                    ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
+                        QString::fromLatin1(bytes.toBase64()))
+                    : localImageFileUrl(localPath));
             return;
         }
         if (imageUrl.trimmed().isEmpty()) {
@@ -1630,11 +1640,13 @@ void PlayerController::prefetchImage(const QString &apiUrl) {
             QString mime = imageReply->header(QNetworkRequest::ContentTypeHeader).toString()
                 .section(QLatin1Char(';'), 0, 0).trimmed();
             if (mime.isEmpty()) mime = QStringLiteral("image/png");
-            imageCache_.put(trimmedApiUrl, imageReply->url().toString(), imageBytes, mime);
+            const QString localPath = cacheImageBytes(trimmedApiUrl, imageReply->url().toString(), imageBytes, mime);
             emit imageCacheChanged();
             emit imagePrefetched(trimmedApiUrl,
-                QStringLiteral("data:%1;base64,%2").arg(mime,
-                    QString::fromLatin1(imageBytes.toBase64())));
+                localPath.isEmpty()
+                    ? QStringLiteral("data:%1;base64,%2").arg(mime,
+                        QString::fromLatin1(imageBytes.toBase64()))
+                    : localImageFileUrl(localPath));
         });
     });
 }
@@ -1660,6 +1672,18 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
         .arg(apiSiteModel_.currentIndex()));
     if (apiUrl.isEmpty()) {
         setImageState(false, currentImageUrl_, QStringLiteral("没有配置图片站点"));
+        return;
+    }
+
+    // 磁盘缓存有直接可用的图片时先展示，用户点击“换一张”不必等网络往返；
+    // 预载池会继续在后台补新图。
+    const CachedImageEntry cached = imageCache_.take(apiUrl);
+    if (!cached.bytes.isEmpty() && !cached.localPath.isEmpty()) {
+        currentImageBytes_ = cached.bytes;
+        currentImageContentType_ = cached.mimeType;
+        setImageState(false, cached.sourceUrl.isEmpty() ? currentImageUrl_ : cached.sourceUrl,
+            QStringLiteral("已从磁盘缓存加载图片"), localImageFileUrl(cached.localPath));
+        emit imageCacheChanged();
         return;
     }
 
@@ -1707,9 +1731,13 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
             currentImageBytes_ = bytes;
             currentImageContentType_ = contentType;
             const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
-            const QString displayUrl = QStringLiteral("data:%1;base64,%2").arg(
-                mime.isEmpty() ? QStringLiteral("image/png") : mime,
-                QString::fromLatin1(bytes.toBase64()));
+            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
+            const QString localPath = cacheImageBytes(apiSiteModel_.imageBaseUrl().trimmed(), reply->url().toString(), bytes, effectiveMime);
+            emit imageCacheChanged();
+            const QString displayUrl = localPath.isEmpty()
+                ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
+                    QString::fromLatin1(bytes.toBase64()))
+                : localImageFileUrl(localPath);
             setImageState(false, imageUrl, QStringLiteral("图片已加载"), displayUrl);
             return;
         }
@@ -1749,9 +1777,13 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
             currentImageBytes_ = imageBytes;
             currentImageContentType_ = imageContentType.isEmpty() ? QStringLiteral("image/png") : imageContentType;
             const QString mime = currentImageContentType_.section(QLatin1Char(';'), 0, 0).trimmed();
-            const QString displayUrl = QStringLiteral("data:%1;base64,%2").arg(
-                mime.isEmpty() ? QStringLiteral("image/png") : mime,
-                QString::fromLatin1(imageBytes.toBase64()));
+            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
+            const QString localPath = cacheImageBytes(apiSiteModel_.imageBaseUrl().trimmed(), finalImageUrl, imageBytes, effectiveMime);
+            emit imageCacheChanged();
+            const QString displayUrl = localPath.isEmpty()
+                ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
+                    QString::fromLatin1(imageBytes.toBase64()))
+                : localImageFileUrl(localPath);
             setImageState(false, finalImageUrl, QStringLiteral("图片已加载"), displayUrl);
         });
     });
@@ -2095,6 +2127,7 @@ void PlayerController::prefetchShortVideo(int sourceIndex, const QString &source
     });
 }
 void PlayerController::playShortVideo(int sourceIndex) {
+    suspendCurrentVideoForShortVideo();
     const QStringList sources = {
         QStringLiteral("https://api.yujn.cn/api/zzxjj.php?type=video"),
         QStringLiteral("https://api.yujn.cn/api/nvda.php?type=video"),
@@ -2195,6 +2228,7 @@ void PlayerController::playShortVideo(int sourceIndex) {
 }
 
 void PlayerController::playShortVideoUrl(const QString &sourceUrl, const QString &label) {
+    suspendCurrentVideoForShortVideo();
     const QString trimmedUrl = sourceUrl.trimmed();
     Logger::instance().info(QStringLiteral("[ShortVideoDebug][C++] playShortVideoUrl source=%1 label=%2")
         .arg(trimmedUrl, label));
@@ -2230,6 +2264,59 @@ void PlayerController::stopShortVideo() {
     currentShortVideoUrl_.clear();
     shortVideoMessage_.clear();
     emit shortVideoChanged();
+    restoreSuspendedVideoAfterShortVideo();
+}
+
+void PlayerController::suspendCurrentVideoForShortVideo() {
+    if (!currentShortVideoUrl_.isEmpty() || currentFile_.trimmed().isEmpty()
+        || suspendedVideoRestorePending_ || !suspendedVideoUrl_.isEmpty()) {
+        return;
+    }
+
+    suspendedVideoUrl_ = currentFile_;
+    suspendedVideoPositionMs_ = qMax<qint64>(0, positionMs_);
+    suspendedVideoWasPlaying_ = isPlaying_;
+    suspendedVideoWasPaused_ = isPaused_;
+    Logger::instance().info(QStringLiteral("[Playback] suspended video url=%1 position=%2 playing=%3 paused=%4")
+        .arg(suspendedVideoUrl_)
+        .arg(suspendedVideoPositionMs_)
+        .arg(suspendedVideoWasPlaying_)
+        .arg(suspendedVideoWasPaused_));
+}
+
+void PlayerController::restoreSuspendedVideoAfterShortVideo() {
+    if (suspendedVideoUrl_.isEmpty())
+        return;
+
+    suspendedVideoRestorePending_ = true;
+    const QString restoreUrl = suspendedVideoUrl_;
+    Logger::instance().info(QStringLiteral("[Playback] restoring suspended video url=%1 position=%2")
+        .arg(restoreUrl)
+        .arg(suspendedVideoPositionMs_));
+    playVideoUrl(restoreUrl);
+}
+
+void PlayerController::applyPendingSuspendedVideoState() {
+    if (!suspendedVideoRestorePending_ || currentFile_ != suspendedVideoUrl_)
+        return;
+    if (durationMs_ <= 0 && positionMs_ <= 0)
+        return;
+
+    const qint64 restorePosition = suspendedVideoPositionMs_;
+    const bool shouldPlay = suspendedVideoWasPlaying_;
+    const bool shouldPause = suspendedVideoWasPaused_ || !suspendedVideoWasPlaying_;
+    suspendedVideoRestorePending_ = false;
+    suspendedVideoUrl_.clear();
+    suspendedVideoPositionMs_ = 0;
+    suspendedVideoWasPlaying_ = false;
+    suspendedVideoWasPaused_ = false;
+
+    if (restorePosition > 0)
+        seek(restorePosition);
+    if (shouldPause)
+        pause();
+    else if (shouldPlay)
+        play();
 }
 
 void PlayerController::logShortVideoDebug(const QString &message) {
@@ -3318,6 +3405,28 @@ void PlayerController::loadHotNews(const QString &type) {
             : QStringLiteral("已加载 %1 条 %2 热讯").arg(hotNewsItems_.size()).arg(normalizedType);
         emit hotNewsChanged();
     });
+}
+
+QString PlayerController::localImageFileUrl(const QString &path) {
+    if (path.trimmed().isEmpty()) return {};
+    return QUrl::fromLocalFile(QDir::cleanPath(path)).toString();
+}
+
+bool PlayerController::loadImageBytesFromLocalUrl(const QString &url) {
+    const QUrl qurl(url);
+    if (!qurl.isLocalFile()) return false;
+    QFile file(qurl.toLocalFile());
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    if (bytes.isEmpty()) return false;
+    currentImageBytes_ = bytes;
+    currentImageContentType_ = ImageCacheService::mimeFromExtension(QFileInfo(file).suffix());
+    return true;
+}
+
+QString PlayerController::cacheImageBytes(const QString &apiUrl, const QString &sourceUrl,
+                                          const QByteArray &bytes, const QString &mimeType) {
+    return imageCache_.put(apiUrl, sourceUrl, bytes, mimeType);
 }
 
 void PlayerController::saveImageBytes(const QByteArray &bytes, const QUrl &sourceUrl, const QString &contentType) {

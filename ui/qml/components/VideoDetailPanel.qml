@@ -202,7 +202,9 @@ Rectangle {
 
             // Poster
             Rectangle {
-                Layout.preferredWidth: 200
+                Layout.preferredWidth: Math.max(320, root.width * 0.5 - 8)
+                Layout.maximumWidth: Math.max(320, root.width * 0.5 - 8)
+                Layout.fillWidth: false
                 Layout.fillHeight: true
                 radius: 8
                 color: theme.surfaceColor
@@ -237,9 +239,11 @@ Rectangle {
 
             // Info column
             ColumnLayout {
+                Layout.preferredWidth: Math.max(320, root.width * 0.5 - 8)
+                Layout.minimumWidth: 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 10
+                spacing: 12
 
                 // Meta info
                 Flow {
@@ -294,11 +298,20 @@ Rectangle {
                     Layout.fillWidth: true
                     text: appText.actorPrefix + root.vodActor
                     color: theme.textMutedColor
-                    font.pixelSize: 12
+                    font.pixelSize: 14
                     font.family: theme.fontFamily
                     elide: Text.ElideRight
                     wrapMode: Text.Wrap
                     maximumLineCount: 2
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "简介"
+                    color: theme.textPrimaryColor
+                    font.pixelSize: 16
+                    font.bold: true
+                    font.family: theme.fontFamily
                 }
 
                 // Description
@@ -317,9 +330,11 @@ Rectangle {
                             return t.replace(/<[^>]*>/g, '')
                         }
                         color: theme.textSecondaryColor
-                        font.pixelSize: 12
+                        font.pixelSize: 14
                         font.family: theme.fontFamily
                         wrapMode: Text.Wrap
+                        lineHeight: 1.35
+                        lineHeightMode: Text.ProportionalHeight
                     }
                 }
             }

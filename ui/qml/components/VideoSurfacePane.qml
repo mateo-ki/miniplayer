@@ -10,8 +10,8 @@ Rectangle {
     property bool emptyState: true
     property bool loading: false
     property string currentFileTitle: ""
-    property string emptyTitle: "Open a local video file to begin"
-    property string emptySubtitle: "Drag and drop files or use the Open button"
+    property string emptyTitle: "请选择视频播放"
+    property string emptySubtitle: "请从视频菜单选择内容"
 
     signal doubleClicked()
     signal pressAndHoldStarted()
@@ -112,37 +112,6 @@ Rectangle {
         Column {
             anchors.centerIn: parent
             spacing: 12
-
-            Rectangle {
-                width: 88
-                height: 88
-                radius: 44
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: openMouseArea.containsMouse
-                    ? (root.theme ? root.theme.accentColor : "#f28c28")
-                    : (root.theme ? root.theme.accentMutedColor : "#7a4a17")
-                border.color: root.theme ? root.theme.accentColor : "#f28c28"
-                border.width: 1
-
-                MouseArea {
-                    id: openMouseArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: playerController.openFile()
-                }
-
-                Text {
-                    anchors.centerIn: parent
-                    color: openMouseArea.containsMouse
-                        ? "#101010"
-                        : (root.theme ? root.theme.accentColor : "#f28c28")
-                    text: "Open"
-                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                    font.pixelSize: 18
-                    font.bold: true
-                }
-            }
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter

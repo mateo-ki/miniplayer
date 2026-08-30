@@ -108,7 +108,7 @@ Window {
                     width: 52
                     height: 52
                     radius: 26
-                    color: actionHover.hovered ? "#e02f7cf6" : "#b5121720"
+                    color: actionHover.hovered ? "#e0f28c28" : "#b5121720"
                     border.color: "#66ffffff"
                     border.width: 1
 

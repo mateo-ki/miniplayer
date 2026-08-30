@@ -19,6 +19,8 @@
 #include <QMetaObject>
 #include <QByteArray>
 #include <QCursor>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include "common/constant.h"
 #include "infrastructure/Logger.h"
 #include "render/VideoFrameBridge.h"
@@ -84,6 +86,10 @@ AppBootstrap::AppBootstrap(QObject *parent)
     : QObject(parent) {
 }
 
+QString AppBootstrap::instanceServerName() {
+    return QStringLiteral("MeloBox.SingleInstance.v1");
+}
+
 bool AppBootstrap::initialize() {
     Logger::instance().info(QStringLiteral("AppBootstrap initialize begin"));
     av_log_set_level(AV_LOG_ERROR);
@@ -97,6 +103,10 @@ bool AppBootstrap::initialize() {
     });
     if (!loadMainWindow()) {
         Logger::instance().error(QStringLiteral("Main window load failed: no root QML objects"));
+        return false;
+    }
+    if (!setupInstanceServer()) {
+        Logger::instance().error(QStringLiteral("Single-instance server initialization failed"));
         return false;
     }
     if (auto *win = mainWindow()) {
@@ -144,6 +154,38 @@ bool AppBootstrap::initialize() {
             m_thumbnailProvider->update(key, image);
         });
 
+    return true;
+}
+
+bool AppBootstrap::setupInstanceServer() {
+    QLocalServer::removeServer(instanceServerName());
+    m_instanceServer = new QLocalServer(this);
+    if (!m_instanceServer->listen(instanceServerName())) {
+        Logger::instance().error(QStringLiteral("Cannot listen for second-instance activation: %1")
+            .arg(m_instanceServer->errorString()));
+        m_instanceServer->deleteLater();
+        m_instanceServer = nullptr;
+        return false;
+    }
+
+    QObject::connect(m_instanceServer, &QLocalServer::newConnection, this, [this]() {
+        while (m_instanceServer && m_instanceServer->hasPendingConnections()) {
+            QLocalSocket *socket = m_instanceServer->nextPendingConnection();
+            if (!socket) continue;
+            QObject::connect(socket, &QLocalSocket::readyRead, socket, [this, socket]() {
+                const QByteArray command = socket->readAll();
+                if (command.contains(QByteArrayLiteral("activate"))) {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        showMainWindow();
+                    }, Qt::QueuedConnection);
+                }
+                socket->disconnectFromServer();
+            });
+            QObject::connect(socket, &QLocalSocket::disconnected,
+                             socket, &QObject::deleteLater);
+        }
+    });
+    Logger::instance().info(QStringLiteral("Single-instance activation server listening"));
     return true;
 }
 
@@ -337,11 +379,31 @@ QQuickWindow *AppBootstrap::mainWindow() const {
 void AppBootstrap::showMainWindow() {
     auto *win = mainWindow();
     if (!win) return;
-    win->showNormal();
+    // 先恢复最小化/全屏状态，再 raise + requestActivate
+    if (win->windowState() & (Qt::WindowMinimized | Qt::WindowMaximized | Qt::WindowFullScreen))
+        win->showNormal();
     ensureWindowOnScreen(win);
     win->setVisible(true);
     win->raise();
     win->requestActivate();
+#ifdef Q_OS_WIN
+    // Windows 上 Qt::raise 在被其它窗口遮挡时不一定能切到最前，必须调用系统 API
+    if (auto hwnd = reinterpret_cast<HWND>(win->winId())) {
+        ::ShowWindow(hwnd, SW_RESTORE);
+        ::SetForegroundWindow(hwnd);
+        ::SetActiveWindow(hwnd);
+    }
+#endif
+    // 再延迟一次确保跨进程激活时窗口抢到焦点
+    QTimer::singleShot(120, win, [win]() {
+        win->raise();
+        win->requestActivate();
+#ifdef Q_OS_WIN
+        if (auto hwnd = reinterpret_cast<HWND>(win->winId())) {
+            ::SetForegroundWindow(hwnd);
+        }
+#endif
+    });
     updateTrayActions();
 }
 

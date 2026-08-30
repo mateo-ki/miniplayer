@@ -12,6 +12,7 @@ set(CMAKE_AUTOUIC ON)
 option(MELOBOX_ENABLE_FFMPEG "Enable FFmpeg-backed media integration" ON)
 option(MELOBOX_BUILD_TESTS "Build MeloBox test executables" OFF)
 option(MELOBOX_BUNDLE_MPV "Bundle libmpv runtime in packaged builds" ON)
+option(MELOBOX_ENABLE_RUNTIME_DEPLOYMENT "Run Qt/vcpkg runtime deployment after building" OFF)
 set(MELOBOX_FFMPEG_PROVIDER "auto" CACHE STRING "FFmpeg discovery strategy: auto or custom-cache")
 set_property(CACHE MELOBOX_FFMPEG_PROVIDER PROPERTY STRINGS auto custom-cache)
 set(MELOBOX_APP_VERSION "1.0" CACHE STRING "MeloBox application version shown in the UI and update checks")
@@ -20,6 +21,7 @@ set(MELOBOX_UPDATE_REPO "" CACHE STRING "GitHub repository used by the built-in 
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Multimedia Widgets Network Test)
 find_package(PNG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 qt_standard_project_setup()
 if(MELOBOX_BUILD_TESTS)
@@ -50,6 +52,11 @@ add_library(miniPlayerModels STATIC
     src/models/VideoSearchModel.cpp
     src/models/ApiSiteModel.cpp
     src/models/DownloadModel.cpp
+    src/models/DmghgAnimeModel.cpp
+    src/media/DmghgClient.cpp
+    src/models/BeeVideoModel.cpp
+    src/models/BeeScheduleModel.cpp
+    src/media/BeeClient.cpp
 )
 
 target_include_directories(miniPlayerModels PUBLIC
@@ -60,6 +67,7 @@ target_link_libraries(miniPlayerModels PUBLIC
     Qt6::Core
     Qt6::Gui
     Qt6::Network
+    OpenSSL::Crypto
     miniPlayerInfrastructure
 )
 
@@ -135,6 +143,9 @@ qt_add_qml_module(MeloBox
         ui/qml/components/MediaBrowserWindow.qml
         ui/qml/components/HomeView.qml
         ui/qml/components/VideoPlayerView.qml
+        ui/qml/components/AnimeView.qml
+        ui/qml/components/BeeView.qml
+        ui/qml/components/DanmakuOverlay.qml
         ui/qml/components/ApiManagerDialog.qml
         ui/qml/panels/MediaPanel.qml
         ui/qml/panels/CurrentMediaPanel.qml
@@ -203,23 +214,15 @@ if(NOT MELOBOX_BUNDLE_MPV)
     )
 endif()
 
-add_custom_target(package_installer
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "$<TARGET_FILE_DIR:MeloBox>"
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox"
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox/cache"
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox/download"
-        "${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox/logs"
-    COMMAND ${CMAKE_COMMAND} -E rm -f
-        ${MELOBOX_PACKAGE_CLEAN_FILES}
+add_custom_target(package_installer ALL
     COMMAND ${CMAKE_COMMAND}
+        -DMELOBOX_BUILD_CONFIG=$<CONFIG>
+        -DMELOBOX_BUILD_OUTPUT_DIR=$<TARGET_FILE_DIR:MeloBox>
         -DMELOBOX_INNO_SETUP_COMPILER=${MELOBOX_INNO_SETUP_COMPILER}
         -DMELOBOX_INSTALLER_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/installer/melobox.iss
+        -DMELOBOX_PACKAGE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/dist/MeloBox
+        -DMELOBOX_APP_VERSION=${MELOBOX_APP_VERSION}
+        -DMELOBOX_BUNDLE_MPV=${MELOBOX_BUNDLE_MPV}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PackageInstaller.cmake
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     DEPENDS MeloBox
@@ -236,11 +239,56 @@ if(MELOBOX_BUNDLE_MPV AND EXISTS "${MELOBOX_MPV_RUNTIME_DLL}")
     )
 endif()
 
+# OpenSSL runtime DLL required by DmghgClient (RSA/AES response decryption).
+if(WIN32 AND TARGET OpenSSL::Crypto)
+    add_custom_command(TARGET MeloBox POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:OpenSSL::Crypto>"
+            "$<TARGET_FILE_DIR:MeloBox>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:OpenSSL::SSL>"
+            "$<TARGET_FILE_DIR:MeloBox>"
+        COMMENT "Deploying OpenSSL runtime"
+    )
+endif()
+
+# Dmghg main-gateway responses use the bundled RSA key for decryption.
+add_custom_command(TARGET MeloBox POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/dmghg/dmghg_key.pem"
+        "$<TARGET_FILE_DIR:MeloBox>/dmghg_key.pem"
+    COMMENT "Deploying Dmghg response decryption key"
+)
+
 if(MELOBOX_ENABLE_FFMPEG)
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
     if(MELOBOX_FFMPEG_PROVIDER STREQUAL "custom-cache")
         find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swresample swscale)
     else()
+        # The bundled FindFFmpeg module only searches for headers/libraries when
+        # discovery is explicitly enabled. This is required for vcpkg installs,
+        # where FFmpeg is present under the active toolchain prefix.
+        set(FFMPEG_ENABLE_DISCOVERY ON CACHE BOOL
+            "Allow FindFFmpeg.cmake to search under FFMPEG_ROOT" FORCE)
+        if(NOT FFMPEG_ROOT AND DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+            set(FFMPEG_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+                CACHE PATH "Root directory of the FFmpeg installation" FORCE)
+        endif()
+        # vcpkg's FFmpeg port ships canonical include/lib paths but its package
+        # wrapper can bypass the normal find_* search used by our module. Seed
+        # the cache explicitly when those files are present.
+        if(FFMPEG_ROOT AND EXISTS "${FFMPEG_ROOT}/include/libavformat/avformat.h")
+            set(FFMPEG_INCLUDE_DIR "${FFMPEG_ROOT}/include" CACHE PATH
+                "Directory containing FFmpeg headers" FORCE)
+            foreach(_ffmpeg_component IN ITEMS avformat avcodec avutil swresample swscale)
+                string(TOUPPER "${_ffmpeg_component}" _ffmpeg_component_upper)
+                set(_ffmpeg_library "${FFMPEG_ROOT}/lib/${_ffmpeg_component}.lib")
+                if(EXISTS "${_ffmpeg_library}")
+                    set(FFMPEG_${_ffmpeg_component_upper}_LIBRARY "${_ffmpeg_library}" CACHE FILEPATH
+                        "Path to the ${_ffmpeg_component} library" FORCE)
+                endif()
+            endforeach()
+        endif()
         find_package(FFmpeg QUIET COMPONENTS avformat avcodec avutil swresample swscale)
         if(NOT FFmpeg_FOUND)
             find_package(FFMPEG QUIET)
@@ -283,6 +331,7 @@ if(MELOBOX_ENABLE_FFMPEG)
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/ThumbnailWorker.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/SubtitleDecoder.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/HlsPlaylistFilter.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/media/HlsPlaylistProxy.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/SoftwareDecoderFactory.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/HardwareDecoderFactory.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/render/VideoFrameBridge.cpp
@@ -319,6 +368,7 @@ if(MELOBOX_ENABLE_FFMPEG)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/media/MediaSessionTests.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/core/MediaSession.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/HlsPlaylistFilter.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/media/HlsPlaylistProxy.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/MediaInfoExtractor.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/ImageHlsWorker.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/media/PcmAudioPlayer.cpp
@@ -364,6 +414,8 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/media/ThumbnailWorker.cpp
             src/media/SubtitleDecoder.cpp
             src/media/HlsPlaylistFilter.cpp
+            src/media/HlsPlaylistProxy.cpp
+            src/media/ImageCacheService.cpp
             src/render/VideoFrameBridge.cpp
             src/models/RuntimeLogModel.cpp
             src/models/MediaInfoModel.cpp
@@ -371,6 +423,11 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/models/VideoSearchModel.cpp
             src/models/ApiSiteModel.cpp
             src/models/DownloadModel.cpp
+            src/models/DmghgAnimeModel.cpp
+            src/media/DmghgClient.cpp
+            src/models/BeeVideoModel.cpp
+            src/models/BeeScheduleModel.cpp
+            src/media/BeeClient.cpp
             src/infrastructure/Logger.cpp
         )
 
@@ -386,6 +443,7 @@ if(MELOBOX_ENABLE_FFMPEG)
             Qt6::Multimedia
             Qt6::Widgets
             Qt6::Network
+            OpenSSL::Crypto
             ${miniPlayerFfmpegTargets}
             PNG::PNG
         )
@@ -457,7 +515,7 @@ else()
 endif()
 
 
-if (MSVC)
+if (MSVC AND MELOBOX_ENABLE_RUNTIME_DEPLOYMENT)
     # Depending on the vcpkg toolchain version, _VCPKG_INSTALLED_DIR points at
     # either the "installed" root or the per-triplet directory. Normalize it
     # here so Qt plugins/tools are always resolved from the triplet dir.
@@ -499,6 +557,7 @@ if (MSVC)
                 # Deploy QML import modules so the build output can run directly.
                 COMMAND "${_miniPlayerWinDeployQt}"
                     "$<IF:$<CONFIG:Debug>,--debug,--release>"
+                    "--no-translations"
                     "--qmldir"
                     "${CMAKE_CURRENT_SOURCE_DIR}/ui/qml"
                     "$<TARGET_FILE:${PROJECT_NAME}>"
@@ -600,6 +659,10 @@ if (MSVC)
                 "${_miniPlayerQtPluginDir}/tls/qschannelbackend$<$<CONFIG:Debug>:d>.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/tls"
 
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_miniPlayerQtPluginDir}/tls/qopensslbackend$<$<CONFIG:Debug>:d>.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/tls"
+
                 # multimedia - use Windows native backend only (avoid FFmpeg conflict)
                 COMMAND ${CMAKE_COMMAND} -E make_directory
                 $<TARGET_FILE_DIR:${PROJECT_NAME}>/multimedia
@@ -609,7 +672,8 @@ if (MSVC)
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/multimedia"
 
                 # Remove optional plugins windeployqt may have copied but the app
-                # does not use. Keep qjpeg/qgif and the Windows TLS backend.
+                # does not use. Keep qjpeg/qgif and both TLS backends; BeeWeb
+                # requires OpenSSL for its TLS renegotiation behavior.
                 COMMAND ${CMAKE_COMMAND} -E rm -rf
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/generic"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/iconengines"
@@ -619,38 +683,66 @@ if (MSVC)
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/imageformats/qsvg$<$<CONFIG:Debug>:d>.dll"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/multimedia/ffmpegmediaplugin$<$<CONFIG:Debug>:d>.dll"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/tls/qcertonlybackend$<$<CONFIG:Debug>:d>.dll"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/tls/qopensslbackend$<$<CONFIG:Debug>:d>.dll"
 
                 # libpng
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtPluginBase}/$<$<CONFIG:Debug>:debug/>/bin/libpng16$<$<CONFIG:Debug>:d>.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 
-                # WebP image plugin runtime dependencies
+                # Image plugin runtime dependencies. qjpeg/qwebp are loaded at
+                # runtime, so windeployqt cannot always discover these DLLs.
+                # Use the configuration-specific bin directory to avoid mixing
+                # Debug plugins with Release dependencies.
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_miniPlayerQtBinDir}/jpeg62.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/jpeg62.dll"
+
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtBinDir}/libwebp.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libwebp.dll"
+
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtBinDir}/libwebpdecoder.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libwebpdecoder.dll"
+
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtBinDir}/libwebpdemux.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libwebpdemux.dll"
+
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtBinDir}/libwebpmux.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libwebpmux.dll"
+
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_miniPlayerQtBinDir}/libsharpyuv.dll"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libsharpyuv.dll"
 
                 # Runtime DLLs required transitively by Qt/FFmpeg on vcpkg.
-                # windeployqt does not consistently deploy these non-Qt
-                # dependencies, so keep an explicit release-runtime whitelist.
+                # Keep every source configuration-specific; copying Release
+                # binaries into a Debug output makes Qt plugins fail to load.
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_miniPlayerQtPluginBase}/bin/brotlicommon.dll"
-                "${_miniPlayerQtPluginBase}/bin/brotlidec.dll"
-                "${_miniPlayerQtPluginBase}/bin/bz2.dll"
-                "${_miniPlayerQtPluginBase}/bin/double-conversion.dll"
-                "${_miniPlayerQtPluginBase}/bin/freetype.dll"
-                "${_miniPlayerQtPluginBase}/bin/harfbuzz.dll"
-                "${_miniPlayerQtPluginBase}/bin/jpeg62.dll"
-                "${_miniPlayerQtPluginBase}/bin/libcrypto-3-x64.dll"
-                "${_miniPlayerQtPluginBase}/bin/md4c.dll"
-                "${_miniPlayerQtPluginBase}/bin/pcre2-16.dll"
-                "${_miniPlayerQtPluginBase}/bin/zlib1.dll"
-                "${_miniPlayerQtPluginBase}/bin/zstd.dll"
+                "${_miniPlayerQtBinDir}/brotlicommon.dll"
+                "${_miniPlayerQtBinDir}/brotlidec.dll"
+                "${_miniPlayerQtBinDir}/bz2$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/double-conversion.dll"
+                "${_miniPlayerQtBinDir}/freetype$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/harfbuzz.dll"
+                "${_miniPlayerQtBinDir}/libcrypto-3-x64.dll"
+                "${_miniPlayerQtBinDir}/libssl-3-x64.dll"
+                "${_miniPlayerQtBinDir}/md4c.dll"
+                "${_miniPlayerQtBinDir}/pcre2-16$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/zlib$<$<CONFIG:Debug>:d>1.dll"
+                "${_miniPlayerQtBinDir}/zstd.dll"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+
+                # Qt Quick Controls QML plugins may not be discovered by
+                # windeployqt when imports come from the generated qrc module.
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickTemplates2.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2Basic.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2BasicStyleImpl.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2Impl.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 
                 # MSVC runtime side-by-side DLLs required by the vcpkg Qt build.
@@ -661,6 +753,12 @@ if (MSVC)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$ENV{SystemRoot}/System32/msvcp140_2.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/MSVCP140_2.dll"
+
+                # Keep Qt's plugin lookup self-contained when the application is
+                # launched from an installed directory with a different Qt setup.
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/qt.conf"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/qt.conf"
         )
     endif()
 endif()

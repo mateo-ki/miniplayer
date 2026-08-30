@@ -13,10 +13,10 @@ Item {
     onSelectedVoiceIndexChanged: root.saveUiSettingRequested("selectedVoiceIndex", selectedVoiceIndex)
     readonly property var sources: [
         { title: "可爱配音", subtitle: "and.php", sourceIndex: 0 },
-        { title: "寰″鎾掑▏璇煶", subtitle: "yujie.php", sourceIndex: 1 },
-        { title: "鍧ゅ潳璇煶", subtitle: "sjkunkun.php", sourceIndex: 2 },
-        { title: "缁胯尪", subtitle: "lvcha.php", sourceIndex: 3 },
-        { title: "璇煶鏁寸偣鎶ユ椂", subtitle: "baoshi.php?msg=鏈満鏃堕棿", sourceIndex: 4 }
+        { title: "御姐撒娇语音", subtitle: "yujie.php", sourceIndex: 1 },
+        { title: "坤坤语音", subtitle: "sjkunkun.php", sourceIndex: 2 },
+        { title: "绿茶", subtitle: "lvcha.php", sourceIndex: 3 },
+        { title: "语音整点报时", subtitle: "baoshi.php?msg=本机时间", sourceIndex: 4 }
     ]
 
     ColumnLayout {
@@ -263,7 +263,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     visible: root.controller.voiceMessage.length > 0
-                    text: root.controller.voiceMessage + (root.controller.currentVoiceUrl.length > 0 ? " 路 " + root.controller.currentVoiceUrl : "")
+                    text: root.controller.voiceMessage + (root.controller.currentVoiceUrl.length > 0 ? " · " + root.controller.currentVoiceUrl : "")
                     color: root.theme.accentColor
                     font.family: root.theme.fontFamily
                     font.pixelSize: root.theme.captionSize

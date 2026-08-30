@@ -10,6 +10,78 @@ Rectangle {
     property int editIndex: -1
     property bool isEditing: editIndex >= 0
     property string message: ""
+    property bool sortingEnabled: siteSearchInput.text.trim().length === 0
+                                  && root.selectedTypeFilterValue() === "all"
+    property int reorderSourceIndex: -1
+    property real reorderPointerY: 0
+    property real reorderGrabOffsetY: 0
+
+    function beginSiteReorder(sourceIndex, pointerY, rowY) {
+        if (!root.sortingEnabled) return
+        root.reorderSourceIndex = sourceIndex
+        root.reorderPointerY = pointerY
+        root.reorderGrabOffsetY = siteList.contentY + pointerY - rowY
+        siteList.interactive = false
+        reorderScrollTimer.start()
+    }
+
+    function updateSiteReorder(pointerY) {
+        if (root.reorderSourceIndex < 0) return
+        root.reorderPointerY = pointerY
+    }
+
+    function reorderVisualOffset(rowY) {
+        if (root.reorderSourceIndex < 0) return 0
+        return root.reorderPointerY - root.reorderGrabOffsetY - rowY + siteList.contentY
+    }
+
+    function finishSiteReorder(cancelled) {
+        if (root.reorderSourceIndex < 0) return
+        reorderScrollTimer.stop()
+        siteList.interactive = true
+
+        var sourceIndex = root.reorderSourceIndex
+        root.reorderSourceIndex = -1
+        if (!cancelled) {
+            var step = 82 + siteList.spacing
+            var pointerContentY = siteList.contentY + root.reorderPointerY
+            var insertSlot = 0
+            if (pointerContentY >= siteList.contentHeight) {
+                insertSlot = filteredSiteList.count
+            } else if (pointerContentY > 0) {
+                var hoveredIndex = Math.min(filteredSiteList.count - 1,
+                    Math.floor(pointerContentY / step))
+                var hoveredTop = hoveredIndex * step
+                insertSlot = hoveredIndex
+                if (pointerContentY - hoveredTop >= 41)
+                    insertSlot += 1
+            }
+            if (root.controller.apiSiteModel.moveSiteToSlot(sourceIndex, insertSlot)) {
+                root.message = "已调整站点顺序"
+            }
+        }
+
+        root.clampSiteListContentY()
+    }
+
+    Timer {
+        id: reorderScrollTimer
+        interval: 16
+        repeat: true
+        onTriggered: {
+            if (root.reorderSourceIndex < 0 || siteList.contentHeight <= siteList.height) return
+            var edgeSize = Math.min(72, siteList.height * 0.2)
+            var delta = 0
+            if (root.reorderPointerY < edgeSize) {
+                delta = -Math.max(3, (edgeSize - root.reorderPointerY) * 0.22)
+            } else if (root.reorderPointerY > siteList.height - edgeSize) {
+                delta = Math.max(3, (root.reorderPointerY - siteList.height + edgeSize) * 0.22)
+            }
+            if (delta === 0) return
+            var maximumY = Math.max(0, siteList.contentHeight - siteList.height)
+            siteList.contentY = Math.max(0, Math.min(maximumY, siteList.contentY + delta))
+        }
+    }
 
     ListModel {
         id: filteredSiteList
@@ -79,6 +151,7 @@ Rectangle {
     }
 
     function refreshFilteredSites() {
+        var previousContentY = siteList.contentY
         filteredSiteList.clear()
         for (var i = 0; i < root.controller.apiSiteModel.count; ++i) {
             var siteType = root.controller.apiSiteModel.typeAt(i)
@@ -89,18 +162,73 @@ Rectangle {
                 "name": root.controller.apiSiteModel.nameAt(i),
                 "baseUrl": root.controller.apiSiteModel.baseUrlAt(i),
                 "siteType": siteType,
+                "premium": root.controller.apiSiteModel.premiumAt(i),
                 "shareSelected": root.controller.apiSiteModel.shareSelectedAt(i),
                 "accessStatus": root.controller.apiSiteModel.accessStatusAt(i),
                 "accessStatusText": root.controller.apiSiteModel.accessStatusTextAt(i)
             })
         }
+        Qt.callLater(function() {
+            var maximumY = Math.max(0, siteList.contentHeight - siteList.height)
+            siteList.contentY = Math.max(0, Math.min(maximumY, previousContentY))
+        })
+    }
+
+    function clampSiteListContentY() {
+        Qt.callLater(function() {
+            var maximumY = Math.max(0, siteList.contentHeight - siteList.height)
+            siteList.contentY = Math.max(0, Math.min(maximumY, siteList.contentY))
+        })
+    }
+
+    function filteredIndexForSource(sourceIndex) {
+        for (var i = 0; i < filteredSiteList.count; ++i) {
+            if (filteredSiteList.get(i).sourceIndex === sourceIndex) return i
+        }
+        return -1
+    }
+
+    function syncFilteredSite(sourceIndex) {
+        if (sourceIndex < 0 || sourceIndex >= root.controller.apiSiteModel.count) return
+        var siteType = root.controller.apiSiteModel.typeAt(sourceIndex)
+        var matches = root.controller.apiSiteModel.matchesFilter(sourceIndex, siteSearchInput.text)
+                      && root.matchesTypeFilter(siteType)
+        var filteredIndex = root.filteredIndexForSource(sourceIndex)
+        if (!matches) {
+            if (filteredIndex >= 0) filteredSiteList.remove(filteredIndex)
+            return
+        }
+
+        var siteData = {
+            "sourceIndex": sourceIndex,
+            "name": root.controller.apiSiteModel.nameAt(sourceIndex),
+            "baseUrl": root.controller.apiSiteModel.baseUrlAt(sourceIndex),
+            "siteType": siteType,
+            "premium": root.controller.apiSiteModel.premiumAt(sourceIndex),
+            "shareSelected": root.controller.apiSiteModel.shareSelectedAt(sourceIndex),
+            "accessStatus": root.controller.apiSiteModel.accessStatusAt(sourceIndex),
+            "accessStatusText": root.controller.apiSiteModel.accessStatusTextAt(sourceIndex)
+        }
+        if (filteredIndex >= 0) {
+            for (var key in siteData) filteredSiteList.setProperty(filteredIndex, key, siteData[key])
+            return
+        }
+
+        var insertIndex = 0
+        while (insertIndex < filteredSiteList.count
+               && filteredSiteList.get(insertIndex).sourceIndex < sourceIndex) ++insertIndex
+        filteredSiteList.insert(insertIndex, siteData)
     }
 
     Connections {
         target: root.controller.apiSiteModel
         function onCountChanged() { root.refreshFilteredSites() }
-        function onCurrentIndexChanged() { root.refreshFilteredSites() }
-        function onDataChanged() { root.refreshFilteredSites() }
+        function onDataChanged(topLeft, bottomRight) {
+            for (var row = topLeft.row; row <= bottomRight.row; ++row) root.syncFilteredSite(row)
+        }
+        function onOrderChanged() { root.refreshFilteredSites() }
+        function onRemoteSitesLoadFinished(message) { root.message = message }
+        function onJsonSitesLoadFinished(message) { root.message = message }
     }
 
     component ActionButton: Rectangle {
@@ -182,6 +310,16 @@ Rectangle {
                 }
 
                 ActionButton {
+                    label: root.controller.apiSiteModel.remoteSitesLoading ? "加载中..." : "加载站点"
+                    enabledState: !root.controller.apiSiteModel.remoteSitesLoading
+                                  && !root.controller.apiSiteModel.jsonSitesLoading
+                    onClicked: {
+                        root.message = "正在加载远程站点..."
+                        root.controller.apiSiteModel.loadRemoteSites()
+                    }
+                }
+
+                ActionButton {
                     label: "检测全部"
                     fillColor: theme.accentColor
                     hoverColor: theme.accentMutedColor
@@ -245,6 +383,18 @@ Rectangle {
                             onClicked: {
                                 root.controller.apiSiteModel.selectAllForShare(false)
                                 root.message = "已清空分享选择"
+                            }
+                        }
+
+                        ActionButton {
+                            label: "删除选中"
+                            fillColor: theme.dangerColor
+                            hoverColor: theme.dangerColor
+                            labelColor: "#ffffff"
+                            outlined: false
+                            onClicked: {
+                                root.message = root.controller.apiSiteModel.removeSelectedSites()
+                                root.resetForm()
                             }
                         }
 
@@ -324,12 +474,21 @@ Rectangle {
                         }
 
                         delegate: Rectangle {
+                            id: siteRow
                             width: ListView.view.width
                             height: 82
                             radius: theme.controlRadius
                             color: rowHover.hovered ? theme.panelRaisedColor : theme.surfaceColor
                             border.color: root.controller.apiSiteModel.currentIndex === model.sourceIndex ? theme.accentColor : theme.subtleBorderColor
                             border.width: 1
+                            z: root.reorderSourceIndex === model.sourceIndex ? 10 : 0
+                            opacity: root.reorderSourceIndex === model.sourceIndex ? 0.88 : 1.0
+
+                            transform: Translate {
+                                y: root.reorderSourceIndex === model.sourceIndex
+                                   ? root.reorderVisualOffset(siteRow.y)
+                                   : 0
+                            }
 
                             HoverHandler { id: rowHover }
 
@@ -338,6 +497,48 @@ Rectangle {
                                 anchors.leftMargin: 12
                                 anchors.rightMargin: 12
                                 spacing: 10
+
+                                Rectangle {
+                                    id: reorderHandle
+                                    Layout.preferredWidth: 28
+                                    Layout.preferredHeight: 36
+                                    radius: theme.controlRadius
+                                    color: root.reorderSourceIndex === model.sourceIndex
+                                           ? theme.accentMutedColor
+                                           : "transparent"
+                                    opacity: root.sortingEnabled ? 1.0 : 0.35
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "☰"
+                                        color: root.sortingEnabled ? theme.textSecondaryColor : theme.textMutedColor
+                                        font.pixelSize: 18
+                                        font.family: theme.fontFamily
+                                    }
+
+                                    ToolTip.visible: reorderMouse.containsMouse
+                                    ToolTip.text: root.sortingEnabled ? "拖动调整站点顺序" : "清除搜索和类型筛选后可排序"
+
+                                    MouseArea {
+                                        id: reorderMouse
+                                        anchors.fill: parent
+                                        enabled: root.sortingEnabled
+                                        hoverEnabled: true
+                                        preventStealing: true
+                                        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                        onPressed: function(mouse) {
+                                            var point = reorderHandle.mapToItem(siteList, mouse.x, mouse.y)
+                                            root.beginSiteReorder(model.sourceIndex, point.y, siteRow.y)
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            if (!pressed) return
+                                            var point = reorderHandle.mapToItem(siteList, mouse.x, mouse.y)
+                                            root.updateSiteReorder(point.y)
+                                        }
+                                        onReleased: root.finishSiteReorder(false)
+                                        onCanceled: root.finishSiteReorder(true)
+                                    }
+                                }
 
                                 CheckBox {
                                     Layout.preferredWidth: 28
@@ -371,6 +572,26 @@ Rectangle {
                                             font.pixelSize: 14
                                             font.bold: true
                                             elide: Text.ElideRight
+                                        }
+
+                                        Rectangle {
+                                            visible: model.premium
+                                            Layout.preferredWidth: premiumText.implicitWidth + 16
+                                            Layout.preferredHeight: 22
+                                            radius: 6
+                                            color: "#4a3d18"
+                                            border.color: "#d8ad3c"
+                                            border.width: 1
+
+                                            Text {
+                                                id: premiumText
+                                                anchors.centerIn: parent
+                                                text: "优质"
+                                                color: "#ffd86b"
+                                                font.family: theme.fontFamily
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                            }
                                         }
 
                                         Rectangle {
@@ -419,6 +640,17 @@ Rectangle {
                                         font.family: theme.fontFamily
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
+                                    }
+                                }
+
+                                ActionButton {
+                                    label: model.premium ? "★" : "☆"
+                                    Layout.preferredWidth: 36
+                                    labelColor: model.premium ? "#ffd86b" : theme.textSecondaryColor
+                                    onClicked: {
+                                        var wasPremium = model.premium
+                                        root.controller.apiSiteModel.togglePremium(model.sourceIndex)
+                                        root.message = wasPremium ? "已取消优质站点" : "已标记为优质站点"
                                     }
                                 }
 

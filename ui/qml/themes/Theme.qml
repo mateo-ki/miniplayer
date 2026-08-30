@@ -25,7 +25,7 @@ QtObject {
     readonly property int sidebarWidth: 316
     readonly property int infoPanelWidth: 340
     readonly property int topBarHeight: 72
-    readonly property int controlBarHeight: 100
+    readonly property int controlBarHeight: 88
     readonly property int logPanelHeight: 168
 
     readonly property int titleSize: 22

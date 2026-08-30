@@ -35,7 +35,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: "鐞涖劍鍎忛崠"
+                            text: root.strings.memeTitle
                             color: root.theme.textPrimaryColor
                             font.family: root.theme.fontFamily
                             font.pixelSize: root.theme.sectionTitleSize
@@ -88,7 +88,7 @@ Item {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "鎼滅储"
+                            text: root.strings.searchLabel
                             color: "#ffffff"
                             font.family: root.theme.fontFamily
                             font.pixelSize: root.theme.bodySize
@@ -259,7 +259,7 @@ Item {
                     Layout.fillWidth: true
                     visible: root.controller.memeMessage.length > 0
                     text: root.controller.memeMessage
-                    color: root.controller.memeMessage.indexOf("澶辫触") >= 0 || root.controller.memeMessage.indexOf("娌℃湁") >= 0
+                    color: root.controller.memeMessage.indexOf("失败") >= 0 || root.controller.memeMessage.indexOf("没有") >= 0
                         ? root.theme.dangerColor
                         : root.theme.accentColor
                     font.family: root.theme.fontFamily

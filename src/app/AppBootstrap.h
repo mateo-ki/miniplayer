@@ -3,11 +3,13 @@
 #include "controller/PlayerController.h"
 #include <QAbstractNativeEventFilter>
 #include <QObject>
+#include <QString>
 #include <QtQml/QQmlApplicationEngine>
 
 class QSystemTrayIcon;
 class QMenu;
 class QAction;
+class QLocalServer;
 class QQuickWindow;
 class ThumbnailImageProvider;
 
@@ -17,6 +19,7 @@ class AppBootstrap : public QObject, public QAbstractNativeEventFilter {
 public:
     explicit AppBootstrap(QObject *parent = nullptr);
     bool initialize();
+    static QString instanceServerName();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -27,6 +30,7 @@ private:
     void registerQmlTypes();
     void exposeContextProperties();
     bool loadMainWindow();
+    bool setupInstanceServer();
     void setupSystemTray();
     QQuickWindow *mainWindow() const;
     void showMainWindow();
@@ -52,4 +56,5 @@ private:
     QAction *m_muteAction = nullptr;
     QAction *m_quitAction = nullptr;
     ThumbnailImageProvider *m_thumbnailProvider = nullptr;
+    QLocalServer *m_instanceServer = nullptr;
 };

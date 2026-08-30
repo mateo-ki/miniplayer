@@ -17,7 +17,7 @@ Item {
     property int autoRefreshMs: 0
     property int imagePrefetchPending: 0
     readonly property int imagePoolTargetSize: 8
-    readonly property int imagePrefetchConcurrency: 2
+    readonly property int imagePrefetchConcurrency: 4
     ListModel { id: imageSiteList }
     ListModel { id: imagePrefetchPool }
     onRefreshModeChanged: root.saveUiSettingRequested("imageRefreshMode", refreshMode)
@@ -422,7 +422,7 @@ Item {
                                 }
 
                                 Text {
-                                    text: "来源、换图规则与缓存"
+                                    text: "来源、换图规则与图片缓存"
                                     color: root.theme.textMutedColor
                                     font.family: root.theme.fontFamily
                                     font.pixelSize: root.theme.captionSize
@@ -580,7 +580,7 @@ Item {
 
                                     Text {
                                         text: "内存预载 " + imagePrefetchPool.count + "/" + root.imagePoolTargetSize
-                                            + " · 磁盘 " + root.controller.imageDiskCacheCount
+                                            + " · 磁盘缓存图片 " + root.controller.imageDiskCacheCount
                                             + " 张 · " + Math.round(root.controller.imageDiskCacheBytes / 1048576) + " MB"
                                         color: root.theme.textMutedColor
                                         font.family: root.theme.fontFamily
@@ -635,8 +635,11 @@ Item {
                         asynchronous: true
                         cache: true
                         visible: root.controller.currentImageDisplayUrl.length > 0
-                        onSourceChanged: console.log("[ImageDebug][QML] source=", source)
-                        onStatusChanged: console.log("[ImageDebug][QML] status=", status, "source=", source, "painted=", paintedWidth + "x" + paintedHeight)
+                        // 调试日志会把整张 base64 图片数据写进日志 (单行可达 ~1MB),
+                        // 令 miniplayer.log 膨胀到上百 MB。已确认图片加载链路正常,
+                        // 关闭这两行 console.log 防止日志暴涨。
+                        // onSourceChanged: console.log("[ImageDebug][QML] source=", source)
+                        // onStatusChanged: console.log("[ImageDebug][QML] status=", status, "source=", source, "painted=", paintedWidth + "x" + paintedHeight)
                     }
 
                     MouseArea {
@@ -690,28 +693,58 @@ Item {
 
     Dialog {
         id: imagePreviewDialog
+        parent: Overlay.overlay ? Overlay.overlay : root
         anchors.centerIn: parent
-        width: Math.max(320, Math.min(root.width - 48, 1200))
-        height: Math.max(240, Math.min(root.height - 48, 820))
         modal: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         padding: 0
+        // 按图片原始尺寸展示：图片加载完成后用自然分辨率当弹框大小，
+        // 超出窗口时才等比收缩。绑定式 width/height 在 sourceSize 就绪前后
+        // 估值时机不稳定，这里改为状态变化时显式赋值。
+        property int maxW: (Overlay.overlay ? Overlay.overlay.width : root.width) - 64
+        property int maxH: (Overlay.overlay ? Overlay.overlay.height : root.height) - 64
+        width: Math.round(maxW * 0.92)
+        height: Math.round(maxH * 0.92)
+
+
 
         background: Rectangle {
-            color: "#ee090909"
+            color: "#f2060606"
             border.color: root.theme.borderColor
             border.width: 1
             radius: root.theme.panelRadius
         }
 
-        contentItem: Image {
-            source: root.controller.currentImageDisplayUrl
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: true
+        contentItem: Item {
+            implicitWidth: imagePreviewDialog.width
+            implicitHeight: imagePreviewDialog.height
+
+            Image {
+                id: previewImage
+                anchors.fill: parent
+                source: root.controller.currentImageDisplayUrl
+                fillMode: Image.PreserveAspectFit
+                asynchronous: true
+                cache: false
+                sourceSize.width: 0
+            }
+
+            RoundButton {
+                id: previewCloseButton
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 8
+                anchors.rightMargin: 8
+                text: "✕"
+                width: 36
+                height: 36
+                flat: false
+                ToolTip.visible: hovered
+                ToolTip.text: "关闭预览"
+                onClicked: imagePreviewDialog.close()
+            }
         }
     }
-
     Component.onCompleted: {
         root.refreshMode = root.controller.uiSetting("imageRefreshMode", root.refreshMode)
         root.autoRefreshMs = root.controller.uiSetting("imageAutoRefreshMs", root.autoRefreshMs)

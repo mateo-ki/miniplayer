@@ -53,6 +53,9 @@ ApplicationWindow {
     property bool videoFillMode: false
     property real playbackRateBeforeHold: 1.0
     property bool holdSpeedActive: false
+    property bool playbackGestureFeedbackVisible: false
+    property string playbackGestureFeedbackIcon: ""
+    property string playbackGestureFeedbackText: ""
     property bool bottomControlReveal: true
     property int selectedShortVideoSiteIndex: -1
     property string shortVideoPlaybackMode: "random"
@@ -80,6 +83,21 @@ ApplicationWindow {
     property var shortVideoPrefetchPendingSites: []
     property bool mediaBrowserOpening: false
     property bool videoBrowserActive: true
+    property bool animePlaybackActive: false
+    property int animePlaybackVodId: 0
+    property bool animeCommentsDrawerOpen: false
+    property bool animeEpisodesOpen: false
+    property string animeCurrentEpisode: ""
+    // 弹幕(B 站风格,站内 pc/danmu),持久化到 UI 设置。
+    property bool danmakuEnabled: true
+    property real danmakuOpacity: 0.85
+    property int danmakuDisplayMode: 0        // 0全部 1滚动 2顶部 3底部
+    property real danmakuFontScale: 1.0
+    onDanmakuOpacityChanged: saveUiSetting("danmakuOpacity", danmakuOpacity)
+    onDanmakuDisplayModeChanged: saveUiSetting("danmakuDisplayMode", danmakuDisplayMode)
+    onDanmakuFontScaleChanged: saveUiSetting("danmakuFontScale", danmakuFontScale)
+    onDanmakuEnabledChanged: saveUiSetting("danmakuEnabled", danmakuEnabled)
+    property bool beePlaybackActive: false
     property bool playerPageActive: sidebar.currentIndex === 1 || sidebar.currentIndex === 6
     property bool videoBrowserVisible: sidebar.currentIndex === 1 && videoBrowserActive
     property bool shortVideoPlaybackActive: sidebar.currentIndex === 6
@@ -95,6 +113,7 @@ ApplicationWindow {
     readonly property int playerSearchHotZoneMinWidth: 240
     readonly property int playerSearchHotZoneMaxWidth: 440
     readonly property int playerSearchHotZoneHeight: 12
+    readonly property int playerControlHotZoneHeight: appTheme.controlBarHeight
     property bool immersiveMode: sidebar.currentIndex === 1
         && (videoFillMode || window.visibility === Window.FullScreen)
     property bool playerControlsVisible: sidebar.currentIndex === 1
@@ -155,6 +174,11 @@ ApplicationWindow {
             playerPage.syncMpvVideoGeometry()
         }
         playerController.refreshMpvVideoWindow()
+        if (videoGestureWindow.visible) {
+            videoGestureWindow.raise()
+            playerPage.raisePlaybackOverlays()
+        }
+        window.raiseEpisodeOverlays()
         if (playerSearchHotZoneWindow.visible)
             playerSearchHotZoneWindow.raise()
         if (!immersiveMode && normalControlWindow.visible)
@@ -236,8 +260,14 @@ ApplicationWindow {
         // 旧版页面 0 是首页。首页移除后，将旧设置迁移到视频页。
         if (savedPage === 0)
             savedPage = 1
-        sidebar.currentIndex = Math.max(1, Math.min(10, savedPage))
+        sidebar.currentIndex = Math.max(1, Math.min(12, savedPage))
         restoringUiSettings = false
+
+        // 弹幕设置(与 videoFillMode 同款持久化)。
+        danmakuEnabled = playerController.uiSetting("danmakuEnabled", danmakuEnabled)
+        danmakuOpacity = playerController.uiSetting("danmakuOpacity", danmakuOpacity)
+        danmakuDisplayMode = playerController.uiSetting("danmakuDisplayMode", danmakuDisplayMode)
+        danmakuFontScale = playerController.uiSetting("danmakuFontScale", danmakuFontScale)
 
         settingsRestored = true
     }
@@ -293,6 +323,18 @@ ApplicationWindow {
         mediaBrowserWindow.requestActivate()
         revealPlayerControls()
         mediaBrowserOpenCooldown.restart()
+    }
+
+    function toggleAnimeCommentsDrawer() {
+        if (!animePlaybackActive || animePlaybackVodId <= 0)
+            return
+        animeCommentsDrawerOpen = !animeCommentsDrawerOpen
+        if (animeCommentsDrawerOpen) {
+            playerController.dmghgAnimeModel.loadComments(animePlaybackVodId, 1)
+            animeCommentsDrawerWindow.raise()
+        } else {
+            animeCommentsDrawerWindow.close()
+        }
     }
 
 
@@ -428,6 +470,46 @@ ApplicationWindow {
         return "短视频"
     }
 
+    function setAnimePlaybackPlaylist(vodId, currentPart) {
+        var episodes = animePage.model && animePage.model.episodes
+            ? animePage.model.episodes : []
+        var playlist = []
+        var currentIndex = 0
+        for (var i = 0; i < episodes.length; ++i) {
+            var title = String(episodes[i] || "").trim()
+            if (!title) continue
+            playlist.push({
+                // 动漫地址需要异步解析；占位地址只用于统一承载集数模型。
+                url: "dmghg://episode/" + i,
+                title: title
+            })
+            if (title === String(currentPart || "").trim())
+                currentIndex = playlist.length - 1
+        }
+        if (playlist.length > 0)
+            playerController.setPlaylistEpisodes(playlist, currentIndex)
+    }
+
+    function prepareAnimePlayback(part, resolveEpisode) {
+        var title = String(part || "").trim()
+        if (!title) return
+        window.animeCurrentEpisode = title
+        window.animePlaybackVodId = animePage.model.detail.vodId || animePage.selectedVodId
+        window.setAnimePlaybackPlaylist(window.animePlaybackVodId, title)
+        window.animeCommentsDrawerOpen = false
+        window.animePlaybackActive = true
+        sidebar.activePageOverride = 11
+        sidebar.currentIndex = 1
+        window.videoBrowserActive = false
+        window.bottomControlReveal = false
+        playerController.stop()
+        if (resolveEpisode) {
+            playerController.dmghgAnimeModel.playEpisode(window.animePlaybackVodId, title)
+            // 与解析并行预取站内弹幕(按 part 全集分页)。
+            playerController.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, title)
+        }
+    }
+
     function retryShortVideo() {
         if (selectedShortVideoSiteIndex >= 0)
             playShortVideoSite(selectedShortVideoSiteIndex, false)
@@ -443,12 +525,17 @@ ApplicationWindow {
     Connections {
         target: playerController.apiSiteModel
         function onCountChanged() { window.rebuildShortVideoSites() }
-        function onCurrentSiteChanged() { window.rebuildShortVideoSites() }
-        function onDataChanged() { window.rebuildShortVideoSites() }
+        function onSiteContentChanged() { window.rebuildShortVideoSites() }
+        function onOrderChanged() { window.rebuildShortVideoSites() }
     }
 
     Connections {
         target: playerController
+        function onPlaylistEpisodeRequested(index, title) {
+            if (!window.animePlaybackActive || !String(title || "").length)
+                return
+            window.prepareAnimePlayback(title, true)
+        }
         function onShortVideoPrefetched(sourceIndex, videoUrl, label) {
             var pending = window.shortVideoPrefetchPendingSites.slice()
             var pendingIndex = pending.indexOf(sourceIndex)
@@ -470,6 +557,8 @@ ApplicationWindow {
         }
 
         function onCurrentFileChanged() {
+            playbackGestureFeedbackTimer.stop()
+            window.playbackGestureFeedbackVisible = false
             if (window.playerPageActive)
                 window.scheduleVideoSurfaceRefresh("current-file-changed")
         }
@@ -513,6 +602,28 @@ ApplicationWindow {
         function onPlaybackFailed(message) {
             if (window.sidebar.currentIndex === 6 && window.isCurrentShortVideo())
                 window.failoverShortVideo(message)
+        }
+    }
+
+    // 动漫选集解析完成 -> 切到播放器播放真实流地址。
+    // 信号发自 playerController.dmghgAnimeModel,故此处单独连接。
+    Connections {
+        target: playerController.dmghgAnimeModel
+        function onEpisodeResolved(url, title, message) {
+            if (url && url.length > 0) {
+                if (title && title.length > 0)
+                    window.animeCurrentEpisode = title
+                window.animeEpisodesOpen = false
+                animeEpisodesWindow.close()
+                window.animePlaybackActive = true
+                sidebar.activePageOverride = 11
+                sidebar.currentIndex = 1
+                window.videoBrowserActive = false
+                window.bottomControlReveal = false
+                playerController.playVodUrl(url)
+            } else {
+                playerController.logShortVideoDebug("anime episode resolve failed: " + message)
+            }
         }
     }
 
@@ -617,6 +728,15 @@ ApplicationWindow {
         }
     }
 
+    function raiseEpisodeOverlays() {
+        // 选集/抽屉盖在手势层之上时点击会被 videoGestureWindow 抢走,
+        // 每次重排层级后都要把它们重新抬回最上层。
+        if (mediaDrawer.isOpen)
+            mediaDrawerWindow.raise()
+        if (animeEpisodesWindow.visible)
+            animeEpisodesWindow.raise()
+    }
+
     function revealPlayerControls() {
         if (!playerPageActive)
             return
@@ -626,6 +746,7 @@ ApplicationWindow {
             normalControlWindow.raise()
         if (immersiveMode && immersiveControlWindow.visible)
             immersiveControlWindow.raise()
+        raiseEpisodeOverlays()
     }
 
     function schedulePlayerControlsHide() {
@@ -636,17 +757,50 @@ ApplicationWindow {
                 || immersiveHotZoneMouse.containsMouse
                 || controlBar.seeking
                 || floatingControlBar.seeking
-                || playerController.seeking) {
+                || playerController.seeking
+                || controlBar.danmakuSettingsOpen
+                || floatingControlBar.danmakuSettingsOpen) {
             return
         }
         playerControlHideTimer.restart()
     }
 
+    function hidePlayerControlsImmediately() {
+        playerControlHideTimer.stop()
+        if (!playerPageActive
+                || controlBar.hovered
+                || floatingControlBar.hovered
+                || normalControlHotZoneMouse.containsMouse
+                || immersiveHotZoneMouse.containsMouse
+                || controlBar.seeking
+                || floatingControlBar.seeking
+                || playerController.seeking
+                || controlBar.danmakuSettingsOpen
+                || floatingControlBar.danmakuSettingsOpen) {
+            return
+        }
+        bottomControlReveal = false
+        controlBar.closePopups()
+        floatingControlBar.closePopups()
+    }
+
     function togglePlayPause() {
-        if (playerController.isPlaying)
+        var willPause = playerController.isPlaying
+        if (willPause)
             playerController.pause()
         else
             playerController.play()
+        // 仅在点击后暂停时显示短暂反馈；点击暂停图标恢复播放时不显示播放图标。
+        if (willPause) {
+            playbackGestureFeedbackIcon = "\u23F8"
+            playbackGestureFeedbackText = "暂停"
+            playbackGestureFeedbackVisible = true
+            playbackGestureFeedbackTimer.restart()
+        } else {
+            playbackGestureFeedbackTimer.stop()
+            playbackGestureFeedbackVisible = false
+        }
+        Qt.callLater(function() { holdSpeedIndicatorWindow.raise() })
     }
 
     function beginHoldSpeed() {
@@ -654,6 +808,8 @@ ApplicationWindow {
             return
         playbackRateBeforeHold = playerController.playbackRate
         holdSpeedActive = true
+        playbackGestureFeedbackTimer.stop()
+        playbackGestureFeedbackVisible = false
         playerController.setPlaybackRate(3.0)
         holdSpeedIndicatorWindow.raise()
     }
@@ -670,8 +826,12 @@ ApplicationWindow {
         seekDebounceTimer.restart()
     }
 
+    property bool volumeFeedbackVisible: false
+
     function adjustVolume(delta) {
         playerController.setVolume(Math.max(0.0, Math.min(1.0, playerController.volume + delta)))
+        window.volumeFeedbackVisible = true
+        volumeFeedbackTimer.restart()
     }
 
     function toggleFullScreen() {
@@ -723,7 +883,6 @@ ApplicationWindow {
             }
         }
     }
-    Shortcut { sequence: "Ctrl+O"; onActivated: playerController.openFile() }
     Shortcut { sequence: "Ctrl+U"; onActivated: urlDialog.open() }
     Shortcut { sequence: "A"; onActivated: playerController.cycleAspectRatio() }
 
@@ -750,7 +909,9 @@ ApplicationWindow {
                     && !immersiveHotZoneMouse.containsMouse
                     && !controlBar.seeking
                     && !floatingControlBar.seeking
-                    && !playerController.seeking) {
+                    && !playerController.seeking
+                    && !controlBar.danmakuSettingsOpen
+                    && !floatingControlBar.danmakuSettingsOpen) {
                 window.bottomControlReveal = false
             }
         }
@@ -859,13 +1020,14 @@ ApplicationWindow {
                 browserVisible: window.videoBrowserVisible
                 immersiveMode: window.immersiveMode
                 pageActive: sidebar.currentIndex === 1
+                controlBarReservedHeight: 0
                 onTogglePlayPauseRequested: window.togglePlayPause()
                 onFocusHostRequested: window.contentItem.forceActiveFocus()
                 onRevealControlsRequested: window.revealPlayerControls()
-                onHideControlsRequested: window.schedulePlayerControlsHide()
+                onHideControlsRequested: window.hidePlayerControlsImmediately()
                 onBeginHoldSpeedRequested: window.beginHoldSpeed()
                 onEndHoldSpeedRequested: window.endHoldSpeed()
-                onVolumeAdjustmentRequested: function(delta) { window.adjustVolume(delta) }
+                // 滚轮不再调音量，改用键盘 [ / ] 和方向键 Up/Down 调整。
                 onManageSitesRequested: sidebar.currentIndex = 9
                 onPlaybackRequested: {
                     window.videoBrowserActive = false
@@ -938,7 +1100,7 @@ ApplicationWindow {
                 onTogglePlayPauseRequested: window.togglePlayPause()
                 onFocusHostRequested: window.contentItem.forceActiveFocus()
                 onRevealControlsRequested: window.revealPlayerControls()
-                onHideControlsRequested: window.schedulePlayerControlsHide()
+                onHideControlsRequested: window.hidePlayerControlsImmediately()
                 onBeginHoldSpeedRequested: window.beginHoldSpeed()
                 onEndHoldSpeedRequested: window.endHoldSpeed()
                 onWheelScrolled: function(delta) { window.handleShortVideoWheel(delta) }
@@ -981,37 +1143,58 @@ ApplicationWindow {
                 theme: appTheme
                 strings: appText
             }
+            // Page 11: Anime
+            AnimeView {
+                id: animePage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                controller: playerController
+                theme: appTheme
+                sidebar: sidebar
+                onEpisodeRequested: function(part) {
+                    window.animeCurrentEpisode = part || ""
+                    window.animeEpisodesOpen = false
+                    animeEpisodesWindow.close()
+                    window.animePlaybackVodId = animePage.model.detail.vodId || animePage.selectedVodId
+                    window.setAnimePlaybackPlaylist(window.animePlaybackVodId, part)
+                    window.animeCommentsDrawerOpen = false
+                    window.animePlaybackActive = true
+                    sidebar.activePageOverride = 11
+                    sidebar.currentIndex = 1
+                    window.videoBrowserActive = false
+                    window.bottomControlReveal = false
+                    playerController.stop()
+                    // 首次点集走此路径(不经 prepareAnimePlayback),需在此预取站内弹幕。
+                    // 与 AnimeView 内的 playEpisode 并行;danmakuSerial_ 独立,互不干扰。
+                    if (window.animePlaybackVodId > 0 && String(part || "").length > 0)
+                        playerController.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, part)
+                }
+            }
+
+            // Page 12: Bee
+            BeeView {
+                id: beePage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                controller: playerController
+                theme: appTheme
+                sidebar: sidebar
+                onPlaybackRequested: {
+                    window.beePlaybackActive = true
+                    window.videoBrowserActive = false
+                    window.bottomControlReveal = false
+                    sidebar.activePageOverride = 12
+                }
+            }
         }
     }
 
-    Window {
+    // 顶部"搜索热区"窗口已停用：它在标题栏下方放半透明白条，悬停后跳搜索页，体验突兀。
+    Item {
         id: playerSearchHotZoneWindow
-        width: Math.max(window.playerSearchHotZoneMinWidth,
-            Math.min(window.playerSearchHotZoneMaxWidth,
-                (window.width - (sidebar.visible ? sidebar.width : 0)) * window.playerSearchHotZoneRatio))
-        height: window.playerSearchHotZoneHeight
-        x: window.x + (sidebar.visible ? sidebar.width : 0)
-            + Math.max(0, (window.width - (sidebar.visible ? sidebar.width : 0) - width) / 2)
-        y: window.y
+        width: 0
+        height: 0
         visible: false
-        flags: Qt.Tool | Qt.FramelessWindowHint
-        transientParent: window
-        color: "transparent"
-        onVisibleChanged: if (visible) raise()
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#26ffffff"
-        }
-
-        MouseArea {
-            id: playerSearchHotZoneMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            acceptedButtons: Qt.NoButton
-            onEntered: playerSearchHotZoneDelay.restart()
-            onExited: playerSearchHotZoneDelay.stop()
-        }
 
         Timer {
             id: playerSearchHotZoneDelay
@@ -1043,6 +1226,419 @@ ApplicationWindow {
         onManageSitesRequested: sidebar.currentIndex = 9
     }
 
+    Window {
+        id: videoGestureWindow
+        property bool holding: false
+        width: Math.max(1, window.width - (sidebar.visible ? sidebar.width : 0)
+            - (window.immersiveMode ? 0 : appTheme.edgePadding * 2))
+        height: Math.max(1, window.height - (window.immersiveMode ? 0 : appTheme.edgePadding * 2))
+        x: window.x + (sidebar.visible ? sidebar.width : 0)
+            + (window.immersiveMode ? 0 : appTheme.edgePadding)
+        y: window.y + (window.immersiveMode ? 0 : appTheme.edgePadding)
+        visible: window.visible && window.playerPageActive
+            && !window.videoBrowserVisible && playerController.currentFile.length > 0
+        flags: Qt.Tool | Qt.FramelessWindowHint
+        transientParent: window
+        color: "transparent"
+        onVisibleChanged: {
+            if (visible) {
+                raise()
+                Qt.callLater(playerPage.raisePlaybackOverlays)
+            } else if (holding) {
+                holding = false
+                window.endHoldSpeed()
+            }
+        }
+
+        MouseArea {
+            id: videoGestureMouse
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            enabled: !mediaDrawer.isOpen && !window.animeEpisodesOpen
+            hoverEnabled: true
+            pressAndHoldInterval: 350
+            // 单击切换暂停；pressAndHold 已单独走长按倍速逻辑
+            onClicked: if (!videoGestureWindow.holding) window.togglePlayPause()
+            onPressAndHold: {
+                videoGestureWindow.holding = true
+                window.beginHoldSpeed()
+            }
+            onReleased: {
+                if (videoGestureWindow.holding) {
+                    videoGestureWindow.holding = false
+                    window.endHoldSpeed()
+                }
+            }
+            onCanceled: {
+                if (videoGestureWindow.holding) {
+                    videoGestureWindow.holding = false
+                    window.endHoldSpeed()
+                }
+            }
+            onPositionChanged: function(mouse) {
+                if (mouse.y >= Math.max(0, height - window.playerControlHotZoneHeight)) {
+                    window.revealPlayerControls()
+                    if (normalControlWindow.visible) normalControlWindow.raise()
+                    if (immersiveControlWindow.visible) immersiveControlWindow.raise()
+                } else {
+                    window.hidePlayerControlsImmediately()
+                }
+            }
+            // 滚轮不再调音量，改用键盘 [ / ] 和方向键 Up/Down 调整。
+        }
+
+        // 弹幕画在 videoGestureWindow 内、z 低于其 MouseArea,
+        // 画在视频上方但不抢手势;控制条窗口 raise() 在其上,自然遮住底部弹幕。
+        DanmakuOverlay {
+            id: animeDanmakuOverlay
+            anchors.fill: parent
+            z: -1
+            danmakuEnabled: window.animePlaybackActive && window.danmakuEnabled
+                && playerController.currentFile.length > 0
+            danmakuOpacity: window.danmakuOpacity
+            danmaku: playerController.dmghgAnimeModel.danmaku
+            positionMs: playerController.positionMs
+            isPlaying: playerController.isPlaying
+            seeking: playerController.seeking
+            displayMode: window.danmakuDisplayMode
+            fontScale: window.danmakuFontScale
+        }
+
+        Rectangle {
+            id: videoDetailBackButton
+            width: 92
+            height: 36
+            x: 12
+            y: 12
+            z: 10
+            visible: playerPage.detailActive
+            radius: 6
+            color: videoDetailBackMouse.containsMouse
+                ? appTheme.panelRaisedColor : appTheme.panelColor
+            border.color: videoDetailBackMouse.containsMouse
+                ? appTheme.accentColor : appTheme.borderColor
+            border.width: 1
+            opacity: 0.94
+
+            Text {
+                anchors.centerIn: parent
+                text: "\u8fd4\u56de\u8be6\u60c5"
+                color: videoDetailBackMouse.containsMouse
+                    ? appTheme.accentColor : appTheme.textSecondaryColor
+                font.pixelSize: 12
+                font.family: appTheme.fontFamily
+            }
+
+            MouseArea {
+                id: videoDetailBackMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: playerPage.returnToDetailRequested()
+            }
+        }
+
+        Rectangle {
+            id: animeDetailBackButton
+            width: 92
+            height: 36
+            x: 12
+            y: 12
+            z: 10
+            visible: window.animePlaybackActive
+            radius: 6
+            color: animeDetailBackMouse.containsMouse
+                ? appTheme.panelRaisedColor : appTheme.panelColor
+            border.color: animeDetailBackMouse.containsMouse
+                ? appTheme.accentColor : appTheme.borderColor
+            border.width: 1
+            opacity: 0.94
+
+            Text {
+                anchors.centerIn: parent
+                text: "返回详情"
+                color: animeDetailBackMouse.containsMouse
+                    ? appTheme.accentColor : appTheme.textSecondaryColor
+                font.pixelSize: 12
+                font.family: appTheme.fontFamily
+            }
+
+            MouseArea {
+                id: animeDetailBackMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    playerController.pause()
+                    window.animePlaybackActive = false
+                    window.animeCommentsDrawerOpen = false
+                    window.animeEpisodesOpen = false
+                    animeEpisodesWindow.close()
+                    sidebar.activePageOverride = -1
+                    window.videoBrowserActive = true
+                    sidebar.currentIndex = 11
+                }
+            }
+        }
+
+        Rectangle {
+            id: beeDetailBackButton
+            width: 92
+            height: 36
+            x: 12
+            y: 12
+            z: 10
+            visible: window.beePlaybackActive
+            radius: 6
+            color: beeDetailBackMouse.containsMouse
+                ? appTheme.panelRaisedColor : appTheme.panelColor
+            border.color: beeDetailBackMouse.containsMouse
+                ? appTheme.accentColor : appTheme.borderColor
+            border.width: 1
+            opacity: 0.94
+
+            Text {
+                anchors.centerIn: parent
+                text: "返回详情"
+                color: beeDetailBackMouse.containsMouse
+                    ? appTheme.accentColor : appTheme.textSecondaryColor
+                font.pixelSize: 12
+                font.family: appTheme.fontFamily
+            }
+
+            MouseArea {
+                id: beeDetailBackMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    playerController.pause()
+                    window.beePlaybackActive = false
+                    sidebar.activePageOverride = -1
+                    window.videoBrowserActive = true
+                    sidebar.currentIndex = 12
+                }
+            }
+        }
+
+        Rectangle {
+            id: animeEpisodesButton
+            width: 72
+            height: 36
+            x: animeDetailBackButton.x + animeDetailBackButton.width + 8
+            y: 12
+            z: 10
+            // 选集统一放到播放控制栏的“选集”按钮中。
+            visible: false
+            radius: 6
+            color: animeEpisodesMouse.containsMouse
+                ? appTheme.panelRaisedColor : appTheme.panelColor
+            border.color: animeEpisodesMouse.containsMouse
+                ? appTheme.accentColor : appTheme.borderColor
+            border.width: 1
+            opacity: 0.94
+
+            Text {
+                anchors.centerIn: parent
+                text: "选集"
+                color: animeEpisodesMouse.containsMouse
+                    ? appTheme.accentColor : appTheme.textSecondaryColor
+                font.pixelSize: 12
+                font.family: appTheme.fontFamily
+            }
+
+            MouseArea {
+                id: animeEpisodesMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    window.animeEpisodesOpen = true
+                    animeEpisodesWindow.show()
+                    animeEpisodesWindow.raise()
+                    animeEpisodesWindow.requestActivate()
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: playbackGestureFeedbackTimer
+        interval: 700
+        repeat: false
+        onTriggered: window.playbackGestureFeedbackVisible = false
+    }
+
+    // Top-level feedback remains visible above the native mpv video window.
+    Window {
+        id: holdSpeedIndicatorWindow
+        width: window.holdSpeedActive ? 144 : 72
+        height: window.holdSpeedActive ? 82 : 64
+        x: window.x + (sidebar.visible ? sidebar.width : 0)
+            + (window.width - (sidebar.visible ? sidebar.width : 0) - width) / 2
+        y: window.y + (window.height - height) / 2
+        // 仅在点击反馈、长按倍速或鼠标停留在反馈按钮上时可见。
+        visible: window.visible && window.playerPageActive
+            && !window.videoBrowserVisible && playerController.currentFile.length > 0
+            && (window.holdSpeedActive
+                || window.playbackGestureFeedbackVisible)
+        // 暂停/播放提示需要能被点击，因此不能使用 WindowTransparentForInput。
+        flags: Qt.Tool | Qt.FramelessWindowHint
+        transientParent: window
+        color: "transparent"
+        onVisibleChanged: if (visible) raise()
+
+        Rectangle {
+            id: playbackFeedbackBackground
+            anchors.fill: parent
+            radius: window.holdSpeedActive ? 10 : 6
+            // 暂停提示默认只有图标；悬停时显示小块半透明白色反馈，不使用圆形背景。
+            color: "transparent"
+            border.color: "transparent"
+            border.width: 0
+
+            MouseArea {
+                id: playbackFeedbackMouse
+                anchors.fill: parent
+                enabled: !window.holdSpeedActive
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: window.togglePlayPause()
+            }
+
+            Column {
+                anchors.centerIn: parent
+                spacing: window.holdSpeedActive ? 2 : 5
+
+                Text {
+                    visible: window.holdSpeedActive
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "3×"
+                    color: "#e6ffffff"
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 32
+                    font.bold: window.holdSpeedActive
+                }
+
+                Item {
+                    visible: !window.holdSpeedActive
+                    width: 28
+                    height: 34
+                    anchors.horizontalCenter: parent.horizontalCenter
+
+                    Rectangle {
+                        x: 3
+                        y: 2
+                        width: 8
+                        height: parent.height - 4
+                        radius: 1
+                        color: "#e6ffffff"
+                    }
+
+                    Rectangle {
+                        x: 17
+                        y: 2
+                        width: 8
+                        height: parent.height - 4
+                        radius: 1
+                        color: "#e6ffffff"
+                    }
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: window.holdSpeedActive
+                        ? "倍速播放"
+                        : window.playbackGestureFeedbackText
+                    color: "#d9ffffff"
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 12
+                }
+            }
+        }
+    }
+
+    property real volumeFeedbackVolume: -1
+
+    Connections {
+        target: playerController
+        function onVolumeChanged() {
+            window.volumeFeedbackVolume = playerController.volume
+            window.volumeFeedbackVisible = true
+            volumeFeedbackTimer.restart()
+        }
+    }
+
+    Timer {
+        id: volumeFeedbackTimer
+        interval: 1200
+        repeat: false
+        onTriggered: window.volumeFeedbackVisible = false
+    }
+
+    // 键盘调音量时的右上角半透明提示，档次与倍速/播放提示一致但不拦截输入。
+    Window {
+        id: volumeFeedbackWindow
+        width: 168
+        height: 44
+        x: window.x + window.width - width - (window.immersiveMode ? 12 : appTheme.edgePadding + 4)
+        y: window.y + (window.immersiveMode ? 12 : appTheme.edgePadding + 4)
+        // 不限于播放页：只要按了音量键就显示
+        visible: window.visible && window.volumeFeedbackVisible
+            && window.volumeFeedbackVolume >= 0
+        flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowTransparentForInput
+        transientParent: window
+        color: "transparent"
+        onVisibleChanged: if (visible) raise()
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 8
+            color: "#d9191b1f"
+            border.color: "#55ffffff"
+            border.width: 1
+
+            Row {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 8
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    // 音量图标随静音/有声音切换
+                    text: playerController.volume <= 0 ? "\uE74F" : "\uE767"
+                    color: "#ffffff"
+                    font.family: "Segoe Fluent Icons"
+                    font.pixelSize: 16
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 72
+                    height: 4
+                    radius: 2
+                    color: "#33ffffff"
+
+                    Rectangle {
+                        width: parent.width * Math.max(0, Math.min(1, playerController.volume))
+                        height: parent.height
+                        radius: 2
+                        color: "#ffffff"
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Math.round(Math.max(0, Math.min(1, playerController.volume)) * 100) + "%"
+                    color: "#d9ffffff"
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 11
+                }
+            }
+        }
+    }
+
     ShortVideoOverlay {
         id: shortVideoOverlayWindow
         hostWindow: window
@@ -1064,7 +1660,7 @@ ApplicationWindow {
     Window {
         id: normalControlWindow
         width: Math.max(1, window.width - (sidebar.visible ? sidebar.width : 0))
-        height: window.playerControlsVisible ? appTheme.controlBarHeight + 16 : 16
+        height: window.playerControlHotZoneHeight
         x: window.x + (sidebar.visible ? sidebar.width : 0)
         y: window.y + window.height - height
         visible: window.visible && sidebar.currentIndex === 1 && !window.immersiveMode
@@ -1079,15 +1675,6 @@ ApplicationWindow {
                 window.bottomControlReveal = false
         }
 
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 16
-            color: "#22ffffff"
-            z: 0
-        }
-
         MouseArea {
             id: normalControlHotZoneMouse
             anchors.fill: parent
@@ -1097,7 +1684,7 @@ ApplicationWindow {
                 window.revealPlayerControls()
                 normalControlWindow.raise()
             }
-            onExited: window.schedulePlayerControlsHide()
+            onExited: window.hidePlayerControlsImmediately()
         }
 
         PlaybackControlBar {
@@ -1107,8 +1694,8 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
             anchors.leftMargin: appTheme.edgePadding
             anchors.rightMargin: appTheme.edgePadding
-            anchors.bottomMargin: 4
-            height: appTheme.controlBarHeight
+            anchors.bottomMargin: 0
+            height: parent.height
             visible: window.playerControlsVisible
             opacity: visible ? 1.0 : 0.0
             z: 2
@@ -1128,6 +1715,13 @@ ApplicationWindow {
             fullScreenMode: window.visibility === Window.FullScreen
             drawerOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "info"
             playlistOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "playlist"
+            commentsAvailable: window.animePlaybackActive
+            commentsOpen: window.animeCommentsDrawerOpen
+            danmakuAvailable: window.animePlaybackActive
+            danmakuEnabled: window.danmakuEnabled
+            danmakuOpacityValue: window.danmakuOpacity
+            danmakuDisplayModeValue: window.danmakuDisplayMode
+            danmakuFontScaleValue: window.danmakuFontScale
             onTogglePlayPause: window.togglePlayPause()
             onSeekRequested: function(value) { playerController.seek(value) }
             onVolumeRequested: function(value) { playerController.setVolume(value / 100.0) }
@@ -1138,8 +1732,15 @@ ApplicationWindow {
                 } else {
                     mediaDrawer.drawerMode = "playlist"
                     mediaDrawer.open()
+                    mediaDrawerWindow.raise()
                 }
             }
+            onCommentsRequested: window.toggleAnimeCommentsDrawer()
+            onDanmakuRequested: window.danmakuEnabled = !window.danmakuEnabled
+            onDanmakuSettingsRequested: controlBar.openDanmakuSettings(controlBar.mapToItem(null, 0, 0))
+            onDanmakuOpacityRequested: function(value) { window.danmakuOpacity = value }
+            onDanmakuDisplayModeRequested: function(mode) { window.danmakuDisplayMode = mode }
+            onDanmakuFontScaleRequested: function(value) { window.danmakuFontScale = value }
             onDownloadRequested: {
                 playerController.saveCurrentPlaylistM3u8()
                 sidebar.currentIndex = 3
@@ -1155,7 +1756,7 @@ ApplicationWindow {
                 if (hovered) {
                     window.revealPlayerControls()
                 } else {
-                    window.schedulePlayerControlsHide()
+                    window.hidePlayerControlsImmediately()
                 }
             }
             onVisibleChanged: Qt.callLater(playerPage.syncMpvVideoGeometry)
@@ -1191,7 +1792,7 @@ ApplicationWindow {
                 window.revealPlayerControls()
                 immersiveControlWindow.raise()
             }
-            onExited: window.schedulePlayerControlsHide()
+            onExited: window.hidePlayerControlsImmediately()
         }
 
         PlaybackControlBar {
@@ -1222,6 +1823,13 @@ ApplicationWindow {
             fullScreenMode: window.visibility === Window.FullScreen
             drawerOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "info"
             playlistOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "playlist"
+            commentsAvailable: window.animePlaybackActive
+            commentsOpen: window.animeCommentsDrawerOpen
+            danmakuAvailable: window.animePlaybackActive
+            danmakuEnabled: window.danmakuEnabled
+            danmakuOpacityValue: window.danmakuOpacity
+            danmakuDisplayModeValue: window.danmakuDisplayMode
+            danmakuFontScaleValue: window.danmakuFontScale
             onTogglePlayPause: window.togglePlayPause()
             onSeekRequested: function(value) { playerController.seek(value) }
             onVolumeRequested: function(value) { playerController.setVolume(value / 100.0) }
@@ -1232,8 +1840,15 @@ ApplicationWindow {
                 } else {
                     mediaDrawer.drawerMode = "playlist"
                     mediaDrawer.open()
+                    mediaDrawerWindow.raise()
                 }
             }
+            onCommentsRequested: window.toggleAnimeCommentsDrawer()
+            onDanmakuRequested: window.danmakuEnabled = !window.danmakuEnabled
+            onDanmakuSettingsRequested: floatingControlBar.openDanmakuSettings(floatingControlBar.mapToItem(null, 0, 0))
+            onDanmakuOpacityRequested: function(value) { window.danmakuOpacity = value }
+            onDanmakuDisplayModeRequested: function(mode) { window.danmakuDisplayMode = mode }
+            onDanmakuFontScaleRequested: function(value) { window.danmakuFontScale = value }
             onDownloadRequested: {
                 playerController.saveCurrentPlaylistM3u8()
                 sidebar.currentIndex = 3
@@ -1249,7 +1864,135 @@ ApplicationWindow {
                 if (hovered) {
                     window.revealPlayerControls()
                 } else {
-                    window.schedulePlayerControlsHide()
+                    window.hidePlayerControlsImmediately()
+                }
+            }
+        }
+    }
+
+    Window {
+        id: animeCommentsDrawerWindow
+        width: 380
+        height: window.height - appTheme.edgePadding * 2 - appTheme.controlBarHeight
+        x: window.x + window.width - width - appTheme.edgePadding
+        y: window.y + appTheme.edgePadding
+        visible: window.visible && window.animeCommentsDrawerOpen && window.animePlaybackActive
+        flags: Qt.Tool | Qt.FramelessWindowHint
+        transientParent: window
+        color: "transparent"
+        onVisibleChanged: if (visible) raise()
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 10
+            color: appTheme.panelColor
+            border.color: appTheme.borderColor
+            border.width: 1
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "评论"
+                        color: appTheme.textPrimaryColor
+                        font.family: appTheme.fontFamily
+                        font.pixelSize: 17
+                        font.bold: true
+                    }
+                    Text {
+                        text: playerController.dmghgAnimeModel.commentsLoading
+                            ? "加载中..." : (playerController.dmghgAnimeModel.comments.length + " 条")
+                        color: appTheme.textMutedColor
+                        font.family: appTheme.fontFamily
+                        font.pixelSize: 11
+                        Layout.leftMargin: 6
+                    }
+                    Item { Layout.fillWidth: true }
+                    ToolButton {
+                        text: "↻"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "刷新评论"
+                        onClicked: playerController.dmghgAnimeModel.loadComments(window.animePlaybackVodId, 1)
+                    }
+                    ToolButton {
+                        text: "×"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "关闭评论"
+                        onClicked: {
+                            window.animeCommentsDrawerOpen = false
+                            animeCommentsDrawerWindow.close()
+                        }
+                    }
+                }
+
+                ListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 8
+                    model: playerController.dmghgAnimeModel.comments
+                    delegate: Rectangle {
+                        width: ListView.view.width
+                        height: drawerCommentColumn.implicitHeight + 18
+                        radius: 6
+                        color: appTheme.surfaceColor
+                        border.color: appTheme.subtleBorderColor
+                        border.width: 1
+
+                        ColumnLayout {
+                            id: drawerCommentColumn
+                            anchors.fill: parent
+                            anchors.margins: 9
+                            spacing: 4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: modelData.uname || "匿名用户"
+                                    color: appTheme.accentColor
+                                    font.family: appTheme.fontFamily
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                }
+                                Text {
+                                    visible: modelData.isTop
+                                    text: "置顶"
+                                    color: appTheme.warningColor
+                                    font.family: appTheme.fontFamily
+                                    font.pixelSize: 10
+                                }
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    text: modelData.createdAt || ""
+                                    color: appTheme.textMutedColor
+                                    font.family: appTheme.fontFamily
+                                    font.pixelSize: 10
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: modelData.comments || ""
+                                color: appTheme.textSecondaryColor
+                                font.family: appTheme.fontFamily
+                                font.pixelSize: 13
+                                wrapMode: Text.Wrap
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: !playerController.dmghgAnimeModel.commentsLoading
+                        && playerController.dmghgAnimeModel.comments.length === 0
+                    text: "暂无评论"
+                    color: appTheme.textMutedColor
+                    horizontalAlignment: Text.AlignHCenter
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 12
                 }
             }
         }
@@ -1285,6 +2028,13 @@ ApplicationWindow {
             subtitleTracks: playerController.subtitleTracks
             currentSubtitleTrack: playerController.currentSubtitleTrack
             subtitlesEnabled: playerController.subtitlesEnabled
+            onPlaylistItemRequested: function(index, filePath, title) {
+                if (window.animePlaybackActive && String(filePath || "").indexOf("dmghg://") === 0) {
+                    window.prepareAnimePlayback(title, true)
+                    return
+                }
+                playerController.playFromPlaylist(index)
+            }
             onIsOpenChanged: if (isOpen) mediaDrawerWindow.raise()
         }
     }
@@ -1486,6 +2236,141 @@ ApplicationWindow {
                     font.family: appTheme.fontFamily
                     font.pixelSize: 16
                     font.bold: true
+                }
+            }
+        }
+    }
+
+    Window {
+        id: animeEpisodesWindow
+        width: Math.min(520, Math.max(340, window.width - 120))
+        height: Math.min(560, Math.max(300, window.height - 160))
+        x: window.x + (window.width - width) / 2
+        y: window.y + (window.height - height) / 2
+        // 选集统一由播放控制栏的“选集”按钮打开。
+        visible: false
+        flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        transientParent: window
+        color: appTheme.windowColor
+        onVisibleChanged: if (visible) { raise(); requestActivate() }
+
+        Rectangle {
+            anchors.fill: parent
+            color: appTheme.panelColor
+            border.color: appTheme.subtleBorderColor
+            border.width: 1
+            radius: 8
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: animePage.model.detail.vodName || "选集"
+                        color: appTheme.textPrimaryColor
+                        font.family: appTheme.fontFamily
+                        font.pixelSize: 16
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    ToolButton {
+                        text: "×"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "关闭选集"
+                        onClicked: {
+                            window.animeEpisodesOpen = false
+                            animeEpisodesWindow.close()
+                        }
+                    }
+                }
+
+                Text {
+                    text: "选择要播放的集数"
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 12
+                }
+
+                ListView {
+                    id: animeEpisodesGrid
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 4
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    model: animePage.model && animePage.model.episodes ? animePage.model.episodes : []
+
+                    delegate: Rectangle {
+                        id: episodeDel
+                        width: ListView.view.width
+                        height: 40
+                        radius: appTheme.controlRadius
+                        // ListView.index 是 delegate 根项的附加属性,嵌套子项无法直接以
+                        // 裸 `index` 访问 (Qt6 会抛 "index is not defined",日志刷几万行)。
+                        // 在根项上显式导出,子项用 episodeDel.epIndex 引用。
+                        property int epIndex: ListView.index
+                        property bool currentEpisode: String(modelData) === window.animeCurrentEpisode
+                        color: currentEpisode
+                            ? appTheme.accentMutedColor
+                            : (animeEpisodeMouse.containsMouse ? appTheme.panelRaisedColor : "transparent")
+                        border.color: currentEpisode
+                            ? appTheme.accentColor
+                            : (animeEpisodeMouse.containsMouse ? appTheme.borderColor : "transparent")
+                        border.width: currentEpisode ? 1 : 0
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 24
+                            height: 24
+                            radius: 6
+                            color: parent.currentEpisode ? appTheme.accentColor : appTheme.panelRaisedColor
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: episodeDel.epIndex + 1
+                                color: parent.parent.currentEpisode ? "#ffffff" : appTheme.textMutedColor
+                                font.family: appTheme.fontFamily
+                                font.pixelSize: 10
+                                font.bold: parent.parent.currentEpisode
+                            }
+                        }
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 44
+                            anchors.right: parent.right
+                            anchors.rightMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData
+                            color: parent.currentEpisode ? appTheme.textPrimaryColor : appTheme.textSecondaryColor
+                            font.family: appTheme.fontFamily
+                            font.pixelSize: 13
+                            font.bold: parent.currentEpisode
+                            elide: Text.ElideRight
+                        }
+
+                        MouseArea {
+                            id: animeEpisodeMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                window.animeCurrentEpisode = String(modelData)
+                                window.animeEpisodesOpen = false
+                                animeEpisodesWindow.close()
+                                animePage.episodeRequested(modelData)
+                                animePage.model.playEpisode(window.animePlaybackVodId, modelData)
+                            }
+                        }
+                    }
                 }
             }
         }

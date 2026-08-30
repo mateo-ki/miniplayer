@@ -14,6 +14,8 @@ Item {
     property bool browserVisible: true
     property bool immersiveMode: false
     property bool pageActive: false
+    property real controlBarReservedHeight: 0
+    property bool useGestureBackButton: true
     readonly property alias detailActive: embeddedVideoBrowser.detailActive
 
     signal togglePlayPauseRequested()
@@ -39,12 +41,18 @@ Item {
         videoPane.syncMpvVideoGeometry()
     }
 
+    function raisePlaybackOverlays() {
+        if (videoDetailBackWindow.visible)
+            videoDetailBackWindow.raise()
+    }
+
     VideoSurfacePane {
         id: videoPane
         anchors.fill: parent
         anchors.leftMargin: root.immersiveMode ? 0 : root.theme.edgePadding
         anchors.rightMargin: root.immersiveMode ? 0 : root.theme.edgePadding
         anchors.topMargin: root.immersiveMode ? 0 : root.theme.edgePadding
+        anchors.bottomMargin: 0
         visible: !root.browserVisible
         theme: root.theme
         currentFileTitle: root.controller.currentFile
@@ -100,10 +108,11 @@ Item {
         width: 92
         height: 36
         x: root.hostWindow.x
-            + (root.sidebar.visible && !root.immersiveMode ? root.sidebar.width : 0)
+            + (root.sidebar.visible ? root.sidebar.width : 0)
             + (root.immersiveMode ? 12 : root.theme.edgePadding + 12)
         y: root.hostWindow.y + (root.immersiveMode ? 12 : root.theme.edgePadding + 12)
-        visible: root.hostWindow.visible && root.pageActive && !root.browserVisible
+        visible: !root.useGestureBackButton && root.hostWindow.visible
+            && root.pageActive && !root.browserVisible
             && embeddedVideoBrowser.detailActive
         flags: Qt.Tool | Qt.FramelessWindowHint
         transientParent: root.hostWindow

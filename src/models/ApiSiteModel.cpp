@@ -14,6 +14,7 @@
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QRandomGenerator>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -27,6 +28,13 @@ constexpr int kAccessChecking = 1;
 constexpr int kAccessOk = 2;
 constexpr int kAccessFailed = 3;
 constexpr int kAccessTimeoutMs = 8000;
+constexpr int kMaxConcurrentStatusChecks = 4;
+constexpr int kRemoteSitesTimeoutMs = 15000;
+constexpr qint64 kRemoteSitesMaxBytes = 256 * 1024;
+constexpr auto kRemoteSitesUrl = "https://gitee.com/mateo-ki/melo-box-app/raw/master/vod.txt";
+constexpr int kJsonSitesTimeoutMs = 15000;
+constexpr qint64 kJsonSitesMaxBytes = 1024 * 1024;
+constexpr auto kJsonSitesUrl = "https://gh-proxy.com/https://raw.githubusercontent.com/YYDS678/uzVideo/main/video_sources_default.json";
 
 QByteArray shareSecret() {
     return QByteArrayLiteral("miniPlayer.site-share.v1.fixed-client-key.2026");
@@ -85,6 +93,16 @@ ApiSiteModel::ApiSiteModel(QObject *parent)
     ensureDefaults();
     ensureShareSelectionSize();
     ensureAccessStateSize();
+    if (enforcePremiumOrder())
+        saveToFile();
+}
+
+bool ApiSiteModel::remoteSitesLoading() const {
+    return remoteSitesLoading_;
+}
+
+bool ApiSiteModel::jsonSitesLoading() const {
+    return jsonSitesLoading_;
 }
 
 QString ApiSiteModel::resolveConfigPath() {
@@ -121,6 +139,8 @@ QVariant ApiSiteModel::data(const QModelIndex &index, int role) const {
                                 accessLatencyMs_.value(index.row(), -1));
     case AccessLatencyMsRole:
         return accessLatencyMs_.value(index.row(), -1);
+    case PremiumRole:
+        return item.premium;
     default:
         return {};
     }
@@ -134,7 +154,8 @@ QHash<int, QByteArray> ApiSiteModel::roleNames() const {
         {ShareSelectedRole, "shareSelected"},
         {AccessStatusRole, "accessStatus"},
         {AccessStatusTextRole, "accessStatusText"},
-        {AccessLatencyMsRole, "accessLatencyMs"}
+        {AccessLatencyMsRole, "accessLatencyMs"},
+        {PremiumRole, "premium"}
     };
 }
 
@@ -160,15 +181,22 @@ void ApiSiteModel::setCurrentIndex(int index) {
     emit dataChanged(current, current, {});
 }
 
-void ApiSiteModel::add(const QString &name, const QString &baseUrl, const QString &siteType) {
+void ApiSiteModel::add(const QString &name, const QString &baseUrl, const QString &siteType, bool premium) {
     beginInsertRows(QModelIndex(), items_.size(), items_.size());
-    items_.append({name.trimmed(), baseUrl.trimmed(), normalizeSiteType(siteType)});
+    items_.append({name.trimmed(), baseUrl.trimmed(), normalizeSiteType(siteType), premium});
     shareSelected_.append(false);
     accessStatus_.append(kAccessUnknown);
     accessLatencyMs_.append(-1);
     endInsertRows();
+    const int previousCurrentIndex = currentIndex_;
+    const bool reordered = enforcePremiumOrder();
     saveToFile();
     emit countChanged();
+    if (reordered) {
+        if (currentIndex_ != previousCurrentIndex)
+            emit currentIndexChanged();
+        emit orderChanged();
+    }
 }
 
 void ApiSiteModel::removeAt(int index) {
@@ -219,8 +247,59 @@ void ApiSiteModel::update(int index, const QString &name, const QString &baseUrl
     auto idx = createIndex(index, 0);
     emit dataChanged(idx, idx, {NameRole, BaseUrlRole, SiteTypeRole, AccessStatusRole, AccessStatusTextRole, AccessLatencyMsRole});
     saveToFile();
+    emit siteContentChanged();
     if (index == currentIndex_)
         emit currentSiteChanged();
+}
+
+bool ApiSiteModel::moveSite(int from, int to) {
+    if (from < 0 || from >= items_.size() || to < 0 || to >= items_.size() || from == to)
+        return false;
+
+    const int premiumCount = premiumSiteCount();
+    if (items_[from].premium)
+        to = qBound(0, to, premiumCount - 1);
+    else
+        to = qBound(premiumCount, to, items_.size() - 1);
+    if (from == to)
+        return false;
+
+    ensureShareSelectionSize();
+    ensureAccessStateSize();
+    const int previousCurrentIndex = currentIndex_;
+    const int destinationRow = to > from ? to + 1 : to;
+    if (!beginMoveRows(QModelIndex(), from, from, QModelIndex(), destinationRow))
+        return false;
+
+    items_.move(from, to);
+    shareSelected_.move(from, to);
+    accessStatus_.move(from, to);
+    accessLatencyMs_.move(from, to);
+
+    if (currentIndex_ == from) {
+        currentIndex_ = to;
+    } else if (from < to && currentIndex_ > from && currentIndex_ <= to) {
+        --currentIndex_;
+    } else if (to < from && currentIndex_ >= to && currentIndex_ < from) {
+        ++currentIndex_;
+    }
+
+    endMoveRows();
+    saveToFile();
+    if (currentIndex_ != previousCurrentIndex)
+        emit currentIndexChanged();
+    emit orderChanged();
+    return true;
+}
+
+bool ApiSiteModel::moveSiteToSlot(int from, int slot) {
+    if (from < 0 || from >= items_.size() || slot < 0 || slot > items_.size())
+        return false;
+
+    // The slot is a gap in the original list. Removing a preceding row shifts
+    // the final destination index upward by one.
+    const int targetIndex = slot > from ? slot - 1 : slot;
+    return moveSite(from, targetIndex);
 }
 
 bool ApiSiteModel::selectAt(int index) {
@@ -246,6 +325,35 @@ QString ApiSiteModel::typeAt(int index) const {
     if (index < 0 || index >= items_.size())
         return {};
     return normalizeSiteType(items_[index].type);
+}
+
+bool ApiSiteModel::premiumAt(int index) const {
+    return index >= 0 && index < items_.size() && items_[index].premium;
+}
+
+void ApiSiteModel::setPremium(int index, bool premium) {
+    if (index < 0 || index >= items_.size() || items_[index].premium == premium)
+        return;
+
+    const int previousCurrentIndex = currentIndex_;
+    items_[index].premium = premium;
+    const bool reordered = enforcePremiumOrder();
+    if (!reordered) {
+        const auto idx = createIndex(index, 0);
+        emit dataChanged(idx, idx, {PremiumRole});
+    }
+    saveToFile();
+    if (reordered) {
+        if (currentIndex_ != previousCurrentIndex)
+            emit currentIndexChanged();
+        emit orderChanged();
+    }
+}
+
+void ApiSiteModel::togglePremium(int index) {
+    if (index < 0 || index >= items_.size())
+        return;
+    setPremium(index, !items_[index].premium);
 }
 
 bool ApiSiteModel::shareSelectedAt(int index) const {
@@ -418,6 +526,72 @@ void ApiSiteModel::selectAllForShare(bool selected) {
     }
 }
 
+QString ApiSiteModel::removeSelectedSites() {
+    ensureShareSelectionSize();
+
+    int selectedCount = 0;
+    for (const bool selected : std::as_const(shareSelected_)) {
+        if (selected)
+            ++selectedCount;
+    }
+    if (selectedCount == 0)
+        return QStringLiteral("请先勾选要删除的站点");
+    if (selectedCount >= items_.size())
+        return QStringLiteral("删除失败：至少需要保留一个站点");
+
+    const int previousCurrentIndex = currentIndex_;
+    const QString previousCurrentName = currentName();
+    const QString previousCurrentBaseUrl = currentBaseUrl();
+
+    QVector<ApiSite> remainingItems;
+    QVector<bool> remainingShareSelected;
+    QVector<int> remainingAccessStatus;
+    QVector<int> remainingAccessLatencyMs;
+    QVector<int> oldToNewIndex(items_.size(), -1);
+    remainingItems.reserve(items_.size() - selectedCount);
+    remainingShareSelected.reserve(items_.size() - selectedCount);
+    remainingAccessStatus.reserve(items_.size() - selectedCount);
+    remainingAccessLatencyMs.reserve(items_.size() - selectedCount);
+
+    ensureAccessStateSize();
+    for (int i = 0; i < items_.size(); ++i) {
+        if (shareSelected_[i])
+            continue;
+        oldToNewIndex[i] = remainingItems.size();
+        remainingItems.append(items_[i]);
+        remainingShareSelected.append(false);
+        remainingAccessStatus.append(accessStatus_.value(i, kAccessUnknown));
+        remainingAccessLatencyMs.append(accessLatencyMs_.value(i, -1));
+    }
+
+    int nextCurrentIndex = oldToNewIndex.value(previousCurrentIndex, -1);
+    if (nextCurrentIndex < 0) {
+        nextCurrentIndex = 0;
+        for (int i = 0; i < previousCurrentIndex; ++i) {
+            if (!shareSelected_.value(i, false))
+                ++nextCurrentIndex;
+        }
+        nextCurrentIndex = qMin(nextCurrentIndex, remainingItems.size() - 1);
+    }
+
+    beginResetModel();
+    items_ = std::move(remainingItems);
+    shareSelected_ = std::move(remainingShareSelected);
+    accessStatus_ = std::move(remainingAccessStatus);
+    accessLatencyMs_ = std::move(remainingAccessLatencyMs);
+    currentIndex_ = nextCurrentIndex;
+    endResetModel();
+
+    saveToFile();
+    emit countChanged();
+    if (currentIndex_ != previousCurrentIndex)
+        emit currentIndexChanged();
+    if (currentName() != previousCurrentName || currentBaseUrl() != previousCurrentBaseUrl)
+        emit currentSiteChanged();
+
+    return QStringLiteral("已删除 %1 个选中站点").arg(selectedCount);
+}
+
 QString ApiSiteModel::shareSelectedToClipboard() {
     ensureShareSelectionSize();
 
@@ -434,6 +608,7 @@ QString ApiSiteModel::shareSelectedToClipboard() {
         site["name"] = item.name.trimmed();
         site["baseUrl"] = item.baseUrl.trimmed();
         site["siteType"] = normalizeSiteType(item.type);
+        site["premium"] = item.premium;
         sites.append(site);
     }
 
@@ -460,9 +635,17 @@ QString ApiSiteModel::importSitesFromClipboard() {
     if (!clipboard)
         return QStringLiteral("Import failed: clipboard unavailable");
 
+    return importSitesFromText(clipboard->text());
+}
+
+QString ApiSiteModel::importSitesFromText(const QString &text) {
+    QString shareText = text.trimmed();
+    if (!shareText.isEmpty() && shareText.front() == QChar::ByteOrderMark)
+        shareText.removeFirst();
+
     QJsonObject payload;
-    if (!decodeSharePayload(clipboard->text().trimmed(), &payload))
-        return QStringLiteral("剪贴板里没有可识别的 MeloBox 加密站点分享");
+    if (!decodeSharePayload(shareText, &payload))
+        return QStringLiteral("没有可识别的 MeloBox 加密站点分享");
 
     if (payload.value("type").toString() != QString::fromLatin1(kShareType))
         return QStringLiteral("Share content type mismatch");
@@ -495,6 +678,7 @@ QString ApiSiteModel::importSitesFromClipboard() {
             if (!legacyType.trimmed().isEmpty())
                 siteType = normalizeSiteType(legacyType);
         }
+        const bool premium = site.value("premium").toBool(false);
 
         const QString normalized = normalizeBaseUrl(baseUrl);
         int existingIndex = -1;
@@ -506,12 +690,12 @@ QString ApiSiteModel::importSitesFromClipboard() {
         }
 
         if (existingIndex >= 0) {
-            if (items_[existingIndex].name != name || items_[existingIndex].baseUrl != baseUrl || normalizeSiteType(items_[existingIndex].type) != siteType) {
-                items_[existingIndex] = {name, baseUrl, siteType};
+            if (items_[existingIndex].name != name || items_[existingIndex].baseUrl != baseUrl || normalizeSiteType(items_[existingIndex].type) != siteType || items_[existingIndex].premium != premium) {
+                items_[existingIndex] = {name, baseUrl, siteType, premium};
                 accessStatus_[existingIndex] = kAccessUnknown;
                 accessLatencyMs_[existingIndex] = -1;
                 auto idx = createIndex(existingIndex, 0);
-                emit dataChanged(idx, idx, {NameRole, BaseUrlRole, SiteTypeRole, AccessStatusRole, AccessStatusTextRole, AccessLatencyMsRole});
+                emit dataChanged(idx, idx, {NameRole, BaseUrlRole, SiteTypeRole, PremiumRole, AccessStatusRole, AccessStatusTextRole, AccessLatencyMsRole});
                 ++updated;
             } else {
                 ++skipped;
@@ -520,7 +704,7 @@ QString ApiSiteModel::importSitesFromClipboard() {
         }
 
         beginInsertRows(QModelIndex(), items_.size(), items_.size());
-        items_.append({name, baseUrl, siteType});
+        items_.append({name, baseUrl, siteType, premium});
         shareSelected_.append(false);
         accessStatus_.append(kAccessUnknown);
         accessLatencyMs_.append(-1);
@@ -531,8 +715,17 @@ QString ApiSiteModel::importSitesFromClipboard() {
     if (imported > 0)
         emit countChanged();
 
-    if (imported > 0 || updated > 0)
+    if (imported > 0 || updated > 0) {
+        const int previousCurrentIndex = currentIndex_;
+        const bool reordered = enforcePremiumOrder();
         saveToFile();
+        emit siteContentChanged();
+        if (reordered) {
+            if (currentIndex_ != previousCurrentIndex)
+                emit currentIndexChanged();
+            emit orderChanged();
+        }
+    }
 
     return QStringLiteral("Import complete: added %1, updated %2, skipped %3").arg(imported).arg(updated).arg(skipped);
 }
@@ -540,6 +733,227 @@ QString ApiSiteModel::importSitesFromClipboard() {
 bool ApiSiteModel::hasShareContentInClipboard() const {
     const auto *clipboard = QGuiApplication::clipboard();
     return clipboard && clipboard->text().trimmed().startsWith(QString::fromLatin1(kSharePrefix));
+}
+
+void ApiSiteModel::loadRemoteSites() {
+    if (remoteSitesLoading_)
+        return;
+
+    const QUrl url(QString::fromLatin1(kRemoteSitesUrl));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("MeloBox/1.0 remote-sites"));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(kRemoteSitesTimeoutMs);
+
+    setRemoteSitesLoading(true);
+    remoteSitesReply_ = accessManager_.get(request);
+    const QPointer<QNetworkReply> reply = remoteSitesReply_;
+
+    connect(reply, &QNetworkReply::readyRead, this, [reply]() {
+        if (reply && reply->bytesAvailable() > kRemoteSitesMaxBytes)
+            reply->abort();
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (!reply)
+            return;
+
+        QString message;
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const qint64 contentLength = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+
+        if (contentLength > kRemoteSitesMaxBytes || reply->bytesAvailable() > kRemoteSitesMaxBytes) {
+            message = QStringLiteral("加载站点失败：远程文件过大");
+        } else if (reply->error() != QNetworkReply::NoError) {
+            message = QStringLiteral("加载站点失败：%1").arg(reply->errorString());
+        } else if (httpStatus < 200 || httpStatus >= 300) {
+            message = QStringLiteral("加载站点失败：HTTP %1").arg(httpStatus);
+        } else {
+            const QByteArray content = reply->readAll();
+            if (content.trimmed().isEmpty())
+                message = QStringLiteral("加载站点失败：远程文件为空");
+            else
+                message = importSitesFromText(QString::fromUtf8(content));
+        }
+
+        reply->deleteLater();
+        remoteSitesReply_.clear();
+        setRemoteSitesLoading(false);
+        emit remoteSitesLoadFinished(message);
+    });
+}
+
+void ApiSiteModel::setRemoteSitesLoading(bool loading) {
+    if (remoteSitesLoading_ == loading)
+        return;
+    remoteSitesLoading_ = loading;
+    emit remoteSitesLoadingChanged();
+}
+
+QString ApiSiteModel::importJsonVideoSites(const QByteArray &content, bool refreshStatuses) {
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(content, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+        return QStringLiteral("JSON 导入失败：%1").arg(parseError.errorString());
+    if (!document.isArray())
+        return QStringLiteral("JSON 导入失败：根节点必须是数组");
+
+    struct JsonSite {
+        QString name;
+        QString baseUrl;
+    };
+    QVector<JsonSite> validSites;
+    QSet<QString> seenUrls;
+    int invalid = 0;
+    int duplicated = 0;
+
+    for (const auto &value : document.array()) {
+        if (!value.isObject()) {
+            ++invalid;
+            continue;
+        }
+
+        const QJsonObject object = value.toObject();
+        const QString name = object.value(QStringLiteral("name")).toString().trimmed();
+        const QString baseUrl = object.value(QStringLiteral("api")).toString().trimmed();
+        const QUrl url(baseUrl);
+        const QString scheme = url.scheme().toLower();
+        if (name.isEmpty() || baseUrl.isEmpty() || !url.isValid()
+            || (scheme != QStringLiteral("http") && scheme != QStringLiteral("https"))
+            || url.host().isEmpty()) {
+            ++invalid;
+            continue;
+        }
+
+        const QString normalized = normalizeBaseUrl(baseUrl);
+        if (seenUrls.contains(normalized)) {
+            ++duplicated;
+            continue;
+        }
+        seenUrls.insert(normalized);
+        validSites.append({name, baseUrl});
+    }
+
+    if (validSites.isEmpty())
+        return QStringLiteral("JSON 导入失败：没有有效的视频站点");
+
+    int imported = 0;
+    int updated = 0;
+    int unchanged = 0;
+    QVector<QString> importedUrls;
+    importedUrls.reserve(validSites.size());
+
+    ensureShareSelectionSize();
+    ensureAccessStateSize();
+    for (const auto &site : validSites) {
+        const QString normalized = normalizeBaseUrl(site.baseUrl);
+        int existingIndex = -1;
+        for (int i = 0; i < items_.size(); ++i) {
+            if (normalizeBaseUrl(items_[i].baseUrl) == normalized) {
+                existingIndex = i;
+                break;
+            }
+        }
+
+        if (existingIndex >= 0) {
+            if (items_[existingIndex].name != site.name
+                || items_[existingIndex].baseUrl != site.baseUrl
+                || normalizeSiteType(items_[existingIndex].type) != QStringLiteral("video")) {
+                items_[existingIndex].name = site.name;
+                items_[existingIndex].baseUrl = site.baseUrl;
+                items_[existingIndex].type = QStringLiteral("video");
+                accessStatus_[existingIndex] = kAccessUnknown;
+                accessLatencyMs_[existingIndex] = -1;
+                const auto idx = createIndex(existingIndex, 0);
+                emit dataChanged(idx, idx, {NameRole, BaseUrlRole, SiteTypeRole,
+                    AccessStatusRole, AccessStatusTextRole, AccessLatencyMsRole});
+                ++updated;
+            } else {
+                ++unchanged;
+            }
+        } else {
+            beginInsertRows(QModelIndex(), items_.size(), items_.size());
+            items_.append({site.name, site.baseUrl, QStringLiteral("video"), false});
+            shareSelected_.append(false);
+            accessStatus_.append(kAccessUnknown);
+            accessLatencyMs_.append(-1);
+            endInsertRows();
+            ++imported;
+        }
+        importedUrls.append(normalized);
+    }
+
+    if (imported > 0)
+        emit countChanged();
+    if (imported > 0 || updated > 0) {
+        saveToFile();
+        emit siteContentChanged();
+    }
+
+    const int countBeforeDeduplication = items_.size();
+    if (items_.size() > 1)
+        deduplicateByUrl();
+    const int removedDuplicates = countBeforeDeduplication - items_.size();
+
+    const int checking = refreshStatuses ? importedUrls.size() : 0;
+    if (refreshStatuses)
+        enqueueSiteStatusChecks(importedUrls);
+
+    return QStringLiteral("JSON 导入完成：新增 %1，更新 %2，未变化 %3，去重 %4，文件内重复 %5，无效 %6，检测 %7")
+        .arg(imported).arg(updated).arg(unchanged).arg(removedDuplicates)
+        .arg(duplicated).arg(invalid).arg(checking);
+}
+
+void ApiSiteModel::loadJsonVideoSites() {
+    if (jsonSitesLoading_)
+        return;
+
+    QNetworkRequest request(QUrl(QString::fromLatin1(kJsonSitesUrl)));
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("MeloBox/1.0 json-sites"));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(kJsonSitesTimeoutMs);
+
+    setJsonSitesLoading(true);
+    jsonSitesReply_ = accessManager_.get(request);
+    const QPointer<QNetworkReply> reply = jsonSitesReply_;
+
+    connect(reply, &QNetworkReply::readyRead, this, [reply]() {
+        if (reply && reply->bytesAvailable() > kJsonSitesMaxBytes)
+            reply->abort();
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (!reply)
+            return;
+
+        QString message;
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const qint64 contentLength = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        if (contentLength > kJsonSitesMaxBytes || reply->bytesAvailable() > kJsonSitesMaxBytes) {
+            message = QStringLiteral("JSON 导入失败：远程文件过大");
+        } else if (reply->error() != QNetworkReply::NoError) {
+            message = QStringLiteral("JSON 导入失败：%1").arg(reply->errorString());
+        } else if (httpStatus < 200 || httpStatus >= 300) {
+            message = QStringLiteral("JSON 导入失败：HTTP %1").arg(httpStatus);
+        } else {
+            const QByteArray content = reply->readAll();
+            message = content.trimmed().isEmpty()
+                ? QStringLiteral("JSON 导入失败：远程文件为空")
+                : importJsonVideoSites(content);
+        }
+
+        reply->deleteLater();
+        jsonSitesReply_.clear();
+        setJsonSitesLoading(false);
+        emit jsonSitesLoadFinished(message);
+    });
+}
+
+void ApiSiteModel::setJsonSitesLoading(bool loading) {
+    if (jsonSitesLoading_ == loading)
+        return;
+    jsonSitesLoading_ = loading;
+    emit jsonSitesLoadingChanged();
 }
 
 void ApiSiteModel::refreshSiteStatusAt(int index) {
@@ -554,6 +968,7 @@ void ApiSiteModel::refreshSiteStatusAt(int index) {
         : statusCheckUrl(baseUrl);
     if (!url.isValid() || url.scheme().isEmpty() || url.host().isEmpty()) {
         setAccessState(index, kAccessFailed);
+        finishSiteStatusCheck(normalized);
         return;
     }
 
@@ -596,13 +1011,118 @@ void ApiSiteModel::refreshSiteStatusAt(int index) {
         }
 
         guardedReply->deleteLater();
+        finishSiteStatusCheck(normalized);
     });
 }
 
 void ApiSiteModel::refreshAllSiteStatuses() {
-    for (int i = 0; i < items_.size(); ++i) {
-        refreshSiteStatusAt(i);
+    QVector<QString> normalizedUrls;
+    normalizedUrls.reserve(items_.size());
+    for (const auto &item : items_)
+        normalizedUrls.append(normalizeBaseUrl(item.baseUrl));
+    enqueueSiteStatusChecks(normalizedUrls);
+}
+
+void ApiSiteModel::enqueueSiteStatusChecks(const QVector<QString> &normalizedUrls) {
+    QSet<QString> queuedUrls;
+    for (const QString &normalized : std::as_const(pendingStatusChecks_))
+        queuedUrls.insert(normalized);
+    queuedUrls.unite(activeStatusChecks_);
+
+    for (const QString &normalized : normalizedUrls) {
+        if (normalized.isEmpty() || queuedUrls.contains(normalized))
+            continue;
+        pendingStatusChecks_.enqueue(normalized);
+        queuedUrls.insert(normalized);
     }
+    pumpSiteStatusChecks();
+}
+
+void ApiSiteModel::pumpSiteStatusChecks() {
+    while (activeStatusChecks_.size() < kMaxConcurrentStatusChecks && !pendingStatusChecks_.isEmpty()) {
+        const QString normalized = pendingStatusChecks_.dequeue();
+        int row = -1;
+        for (int i = 0; i < items_.size(); ++i) {
+            if (normalizeBaseUrl(items_[i].baseUrl) == normalized) {
+                row = i;
+                break;
+            }
+        }
+        if (row < 0)
+            continue;
+
+        activeStatusChecks_.insert(normalized);
+        refreshSiteStatusAt(row);
+    }
+}
+
+void ApiSiteModel::finishSiteStatusCheck(const QString &normalizedUrl) {
+    if (!activeStatusChecks_.remove(normalizedUrl))
+        return;
+    pumpSiteStatusChecks();
+}
+
+int ApiSiteModel::premiumSiteCount() const {
+    int count = 0;
+    for (const auto &item : items_) {
+        if (item.premium)
+            ++count;
+    }
+    return count;
+}
+
+bool ApiSiteModel::enforcePremiumOrder() {
+    if (items_.size() < 2)
+        return false;
+
+    bool foundStandard = false;
+    bool needsReorder = false;
+    for (const auto &item : items_) {
+        if (!item.premium) {
+            foundStandard = true;
+        } else if (foundStandard) {
+            needsReorder = true;
+            break;
+        }
+    }
+    if (!needsReorder)
+        return false;
+
+    ensureShareSelectionSize();
+    ensureAccessStateSize();
+
+    QVector<ApiSite> reorderedItems;
+    QVector<bool> reorderedShareSelected;
+    QVector<int> reorderedAccessStatus;
+    QVector<int> reorderedAccessLatencyMs;
+    QVector<int> oldToNewIndex(items_.size(), -1);
+    reorderedItems.reserve(items_.size());
+    reorderedShareSelected.reserve(items_.size());
+    reorderedAccessStatus.reserve(items_.size());
+    reorderedAccessLatencyMs.reserve(items_.size());
+
+    const auto appendGroup = [&](bool premium) {
+        for (int i = 0; i < items_.size(); ++i) {
+            if (items_[i].premium != premium)
+                continue;
+            oldToNewIndex[i] = reorderedItems.size();
+            reorderedItems.append(items_[i]);
+            reorderedShareSelected.append(shareSelected_.value(i, false));
+            reorderedAccessStatus.append(accessStatus_.value(i, kAccessUnknown));
+            reorderedAccessLatencyMs.append(accessLatencyMs_.value(i, -1));
+        }
+    };
+    appendGroup(true);
+    appendGroup(false);
+
+    beginResetModel();
+    items_ = std::move(reorderedItems);
+    shareSelected_ = std::move(reorderedShareSelected);
+    accessStatus_ = std::move(reorderedAccessStatus);
+    accessLatencyMs_ = std::move(reorderedAccessLatencyMs);
+    currentIndex_ = oldToNewIndex.value(currentIndex_, 0);
+    endResetModel();
+    return true;
 }
 
 void ApiSiteModel::loadFromFile() {
@@ -628,8 +1148,9 @@ void ApiSiteModel::loadFromFile() {
         const QString name = obj.value("name").toString().trimmed();
         const QString baseUrl = obj.value("baseUrl").toString().trimmed();
         const QString type = normalizeSiteType(obj.value("type").toString(QStringLiteral("video")));
+        const bool premium = obj.value("premium").toBool(false);
         if (!name.isEmpty() && !baseUrl.isEmpty()) {
-            items_.append({name, baseUrl, type});
+            items_.append({name, baseUrl, type, premium});
         }
     }
 }
@@ -644,6 +1165,7 @@ void ApiSiteModel::saveToFile() {
         obj["name"] = item.name;
         obj["baseUrl"] = item.baseUrl;
         obj["type"] = normalizeSiteType(item.type);
+        obj["premium"] = item.premium;
         arr.append(obj);
     }
     root["sites"] = arr;
