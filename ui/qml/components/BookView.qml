@@ -12,8 +12,8 @@ Rectangle {
     property var controller
     property var theme
     property var sidebar
-    readonly property var sourceModel: controller ? controller.legadoSourceModel : null
-    readonly property var model: controller ? controller.legadoBookModel : null
+    readonly property var sourceModel: controller ? services.legadoSourceModel : null
+    readonly property var model: controller ? services.legadoBookModel : null
     property bool importOpen: false
     property bool tocOpen: false
     property bool readerOpen: false
@@ -147,7 +147,6 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: importOpen ? 190 : 0
-            Behavior on preferredHeight { NumberAnimation { duration: 140 } }
             visible: importOpen
             clip: true
             radius: root.theme.controlRadius
@@ -720,7 +719,6 @@ Rectangle {
                     color: "#d8d2c8"
                     font.pixelSize: 17
                     font.family: root.theme.fontFamily
-                    lineHeight: 1.6
                     textFormat: Text.PlainText
                     background: Rectangle { color: "transparent" }
                 }

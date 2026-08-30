@@ -25,12 +25,12 @@ Item {
 
     function rebuildImageSites() {
         imageSiteList.clear()
-        for (var i = 0; i < root.controller.apiSiteModel.count; ++i) {
-            if (root.controller.apiSiteModel.typeAt(i) !== "image") continue
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) !== "image") continue
             imageSiteList.append({
                 "sourceIndex": i,
-                "siteName": root.controller.apiSiteModel.nameAt(i),
-                "siteBaseUrl": root.controller.apiSiteModel.baseUrlAt(i)
+                "siteName": services.apiSiteModel.nameAt(i),
+                "siteBaseUrl": services.apiSiteModel.baseUrlAt(i)
             })
         }
     }
@@ -43,7 +43,7 @@ Item {
                     return savedIndex
             }
         }
-        var current = root.controller.apiSiteModel.currentIndex
+        var current = services.apiSiteModel.currentIndex
         for (var i = 0; i < imageSiteList.count; ++i) {
             if (imageSiteList.get(i).sourceIndex === current) {
                 return i
@@ -66,7 +66,7 @@ Item {
         root.rebuildImageSites()
         var comboIndex = root.preferredImageSiteComboIndex()
         if (comboIndex >= 0) {
-            root.controller.apiSiteModel.selectAt(imageSiteList.get(comboIndex).sourceIndex)
+            services.apiSiteModel.selectAt(imageSiteList.get(comboIndex).sourceIndex)
             imageSiteMenu.currentIndex = comboIndex
         }
     }
@@ -124,7 +124,7 @@ Item {
                 && imageSiteList.count > 1) {
             var currentCombo = preferredImageSiteComboIndex()
             var nextCombo = currentCombo >= 0 ? (currentCombo + 1) % imageSiteList.count : 0
-            root.controller.apiSiteModel.selectAt(imageSiteList.get(nextCombo).sourceIndex)
+            services.apiSiteModel.selectAt(imageSiteList.get(nextCombo).sourceIndex)
             imageSiteMenu.currentIndex = nextCombo
             root.saveSelectedImageSite(nextCombo)
             root.resetImagePrefetchPool()
@@ -478,7 +478,7 @@ Item {
                                     onActivated: function(index) {
                                         if (index < 0 || index >= imageSiteList.count) return
                                         currentIndex = index
-                                        root.controller.apiSiteModel.selectAt(imageSiteList.get(index).sourceIndex)
+                                        services.apiSiteModel.selectAt(imageSiteList.get(index).sourceIndex)
                                         root.saveSelectedImageSite(index)
                                         root.resetImagePrefetchPool()
                                         root.requestRandomImage(false)
@@ -776,7 +776,7 @@ Item {
     }
 
     Connections {
-        target: root.controller.apiSiteModel
+        target: services.apiSiteModel
         function onCountChanged() {
             root.rebuildImageSites()
             root.syncImageSiteMenuIndex()

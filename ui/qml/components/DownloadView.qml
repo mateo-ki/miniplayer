@@ -7,15 +7,15 @@ Rectangle {
     color: "transparent"
     property var controller
     property var theme
-    property int selectedIndex: root.controller.downloadModel.count > 0 ? 0 : -1
-    property int revision: root.controller.downloadModel.revision
-    property var selectedEpisodes: selectedIndex >= 0 ? root.controller.downloadModel.episodesForVideo(selectedIndex) : []
+    property int selectedIndex: services.downloadModel.count > 0 ? 0 : -1
+    property int revision: services.downloadModel.revision
+    property var selectedEpisodes: selectedIndex >= 0 ? services.downloadModel.episodesForVideo(selectedIndex) : []
 
     function refreshSelection() {
-        if (selectedIndex >= root.controller.downloadModel.count) {
-            selectedIndex = root.controller.downloadModel.count > 0 ? 0 : -1
+        if (selectedIndex >= services.downloadModel.count) {
+            selectedIndex = services.downloadModel.count > 0 ? 0 : -1
         }
-        selectedEpisodes = selectedIndex >= 0 ? root.controller.downloadModel.episodesForVideo(selectedIndex) : []
+        selectedEpisodes = selectedIndex >= 0 ? services.downloadModel.episodesForVideo(selectedIndex) : []
     }
 
     onRevisionChanged: {
@@ -53,7 +53,7 @@ Rectangle {
                     }
 
                     BusyIndicator {
-                        running: root.controller.downloadModel.active
+                        running: services.downloadModel.active
                         visible: running
                         Layout.preferredWidth: 24
                         Layout.preferredHeight: 24
@@ -62,7 +62,7 @@ Rectangle {
 
                 Text {
                     Layout.fillWidth: true
-                    text: root.controller.downloadModel.rootFolder()
+                    text: services.downloadModel.rootFolder()
                     color: theme ? theme.textMutedColor : "#858585"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: 10
@@ -75,7 +75,7 @@ Rectangle {
                     Layout.fillHeight: true
                     spacing: 8
                     clip: true
-                    model: root.controller.downloadModel
+                    model: services.downloadModel
 
                     delegate: Rectangle {
                         width: ListView.view.width
@@ -96,7 +96,7 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 root.selectedIndex = index
-                                root.selectedEpisodes = root.controller.downloadModel.episodesForVideo(index)
+                                root.selectedEpisodes = services.downloadModel.episodesForVideo(index)
                             }
                         }
 
@@ -164,7 +164,7 @@ Rectangle {
 
                     Text {
                         anchors.centerIn: parent
-                        visible: root.controller.downloadModel.count === 0
+                        visible: services.downloadModel.count === 0
                         text: "还没有下载任务\n可在搜索详情页点“下载本线路”，或播放页点 DL"
                         horizontalAlignment: Text.AlignHCenter
                         color: theme ? theme.textMutedColor : "#858585"
@@ -204,14 +204,14 @@ Rectangle {
                     Button {
                         text: "打开文件夹"
                         enabled: root.selectedIndex >= 0
-                        onClicked: root.controller.downloadModel.openVideoFolder(root.selectedIndex)
+                        onClicked: services.downloadModel.openVideoFolder(root.selectedIndex)
                     }
 
                     Button {
                         text: "删除视频"
-                        enabled: root.selectedIndex >= 0 && !root.controller.downloadModel.active
+                        enabled: root.selectedIndex >= 0 && !services.downloadModel.active
                         onClicked: {
-                            root.controller.downloadModel.deleteVideo(root.selectedIndex, true)
+                            services.downloadModel.deleteVideo(root.selectedIndex, true)
                             root.refreshSelection()
                         }
                     }
@@ -281,9 +281,9 @@ Rectangle {
                             Button {
                                 Layout.preferredWidth: 54
                                 text: "重试"
-                                enabled: !root.controller.downloadModel.active && modelData.status !== "完成"
+                                enabled: !services.downloadModel.active && modelData.status !== "完成"
                                 onClicked: {
-                                    root.controller.downloadModel.retryEpisode(root.selectedIndex, index)
+                                    services.downloadModel.retryEpisode(root.selectedIndex, index)
                                     root.refreshSelection()
                                 }
                             }
@@ -291,9 +291,9 @@ Rectangle {
                             Button {
                                 Layout.preferredWidth: 54
                                 text: "删除"
-                                enabled: !root.controller.downloadModel.active
+                                enabled: !services.downloadModel.active
                                 onClicked: {
-                                    root.controller.downloadModel.deleteEpisode(root.selectedIndex, index, true)
+                                    services.downloadModel.deleteEpisode(root.selectedIndex, index, true)
                                     root.refreshSelection()
                                 }
                             }

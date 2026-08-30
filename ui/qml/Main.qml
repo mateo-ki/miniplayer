@@ -196,12 +196,12 @@ ApplicationWindow {
 
     function rebuildShortVideoSites() {
         shortVideoSiteList.clear()
-        for (var i = 0; i < playerController.apiSiteModel.count; ++i) {
-            if (playerController.apiSiteModel.typeAt(i) !== "shortvideo") continue
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) !== "shortvideo") continue
             shortVideoSiteList.append({
                 "sourceIndex": i,
-                "title": playerController.apiSiteModel.nameAt(i),
-                "subtitle": playerController.apiSiteModel.baseUrlAt(i)
+                "title": services.apiSiteModel.nameAt(i),
+                "subtitle": services.apiSiteModel.baseUrlAt(i)
             })
         }
         var savedShortVideoUrl = playerController.uiSetting("selectedShortVideoSiteUrl", "")
@@ -210,7 +210,7 @@ ApplicationWindow {
             selectedShortVideoSiteIndex = savedShortVideoIndex
         if (shortVideoSiteList.count > 0
                 && (selectedShortVideoSiteIndex < 0
-                    || playerController.apiSiteModel.typeAt(selectedShortVideoSiteIndex) !== "shortvideo")) {
+                    || services.apiSiteModel.typeAt(selectedShortVideoSiteIndex) !== "shortvideo")) {
             selectedShortVideoSiteIndex = shortVideoSiteList.get(0).sourceIndex
         }
         refillShortVideoPrefetchPool()
@@ -276,9 +276,9 @@ ApplicationWindow {
     function findSiteIndexByUrl(typeName, baseUrl) {
         if (!baseUrl || baseUrl.length === 0)
             return -1
-        for (var i = 0; i < playerController.apiSiteModel.count; ++i) {
-            if (playerController.apiSiteModel.typeAt(i) === typeName
-                    && playerController.apiSiteModel.baseUrlAt(i) === baseUrl) {
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) === typeName
+                    && services.apiSiteModel.baseUrlAt(i) === baseUrl) {
                 return i
             }
         }
@@ -293,8 +293,8 @@ ApplicationWindow {
 
     function saveSelectedShortVideoSite() {
         saveUiSetting("selectedShortVideoSiteIndex", selectedShortVideoSiteIndex)
-        if (selectedShortVideoSiteIndex >= 0 && selectedShortVideoSiteIndex < playerController.apiSiteModel.count)
-            saveUiSetting("selectedShortVideoSiteUrl", playerController.apiSiteModel.baseUrlAt(selectedShortVideoSiteIndex))
+        if (selectedShortVideoSiteIndex >= 0 && selectedShortVideoSiteIndex < services.apiSiteModel.count)
+            saveUiSetting("selectedShortVideoSiteUrl", services.apiSiteModel.baseUrlAt(selectedShortVideoSiteIndex))
     }
 
     function openMediaBrowser(tabName) {
@@ -331,7 +331,7 @@ ApplicationWindow {
             return
         animeCommentsDrawerOpen = !animeCommentsDrawerOpen
         if (animeCommentsDrawerOpen) {
-            playerController.dmghgAnimeModel.loadComments(animePlaybackVodId, 1)
+            services.dmghgAnimeModel.loadComments(animePlaybackVodId, 1)
             animeCommentsDrawerWindow.raise()
         } else {
             animeCommentsDrawerWindow.close()
@@ -340,7 +340,7 @@ ApplicationWindow {
 
 
     function playShortVideoSite(siteIndex, recordHistory, prefetchedUrl) {
-        if (siteIndex < 0 || siteIndex >= playerController.apiSiteModel.count) {
+        if (siteIndex < 0 || siteIndex >= services.apiSiteModel.count) {
             shortVideoDebug("playShortVideoSite ignored invalid siteIndex=" + siteIndex)
             return
         }
@@ -351,8 +351,8 @@ ApplicationWindow {
             shortVideoHistoryCursor = history.length - 1
         }
         shortVideoDebug("playShortVideoSite enter siteIndex=" + siteIndex
-            + " name=" + playerController.apiSiteModel.nameAt(siteIndex)
-            + " url=" + playerController.apiSiteModel.baseUrlAt(siteIndex))
+            + " name=" + services.apiSiteModel.nameAt(siteIndex)
+            + " url=" + services.apiSiteModel.baseUrlAt(siteIndex))
         playerController.resetMouseCursor()
         selectedShortVideoSiteIndex = siteIndex
         shortVideoErrorMessage = ""
@@ -371,9 +371,9 @@ ApplicationWindow {
             normalControlWindow.raise()
         var playbackUrl = prefetchedUrl && prefetchedUrl.length > 0
             ? prefetchedUrl
-            : playerController.apiSiteModel.baseUrlAt(siteIndex)
+            : services.apiSiteModel.baseUrlAt(siteIndex)
         playerController.playShortVideoUrl(playbackUrl,
-                                           playerController.apiSiteModel.nameAt(siteIndex))
+                                           services.apiSiteModel.nameAt(siteIndex))
         shortVideoDebug("playShortVideoSite requested")
         scheduleVideoSurfaceRefresh("short-video-play")
     }
@@ -505,9 +505,9 @@ ApplicationWindow {
         window.bottomControlReveal = false
         playerController.stop()
         if (resolveEpisode) {
-            playerController.dmghgAnimeModel.playEpisode(window.animePlaybackVodId, title)
+            services.dmghgAnimeModel.playEpisode(window.animePlaybackVodId, title)
             // 与解析并行预取站内弹幕(按 part 全集分页)。
-            playerController.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, title)
+            services.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, title)
         }
     }
 
@@ -524,7 +524,7 @@ ApplicationWindow {
     }
 
     Connections {
-        target: playerController.apiSiteModel
+        target: services.apiSiteModel
         function onCountChanged() { window.rebuildShortVideoSites() }
         function onSiteContentChanged() { window.rebuildShortVideoSites() }
         function onOrderChanged() { window.rebuildShortVideoSites() }
@@ -607,9 +607,9 @@ ApplicationWindow {
     }
 
     // 动漫选集解析完成 -> 切到播放器播放真实流地址。
-    // 信号发自 playerController.dmghgAnimeModel,故此处单独连接。
+    // 信号发自 services.dmghgAnimeModel,故此处单独连接。
     Connections {
-        target: playerController.dmghgAnimeModel
+        target: services.dmghgAnimeModel
         function onEpisodeResolved(url, title, message) {
             if (url && url.length > 0) {
                 if (title && title.length > 0)
@@ -1168,7 +1168,7 @@ ApplicationWindow {
                     // 首次点集走此路径(不经 prepareAnimePlayback),需在此预取站内弹幕。
                     // 与 AnimeView 内的 playEpisode 并行;danmakuSerial_ 独立,互不干扰。
                     if (window.animePlaybackVodId > 0 && String(part || "").length > 0)
-                        playerController.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, part)
+                        services.dmghgAnimeModel.loadDanmaku(window.animePlaybackVodId, part)
                 }
             }
 
@@ -1315,7 +1315,7 @@ ApplicationWindow {
             danmakuEnabled: window.animePlaybackActive && window.danmakuEnabled
                 && playerController.currentFile.length > 0
             danmakuOpacity: window.danmakuOpacity
-            danmaku: playerController.dmghgAnimeModel.danmaku
+            danmaku: services.dmghgAnimeModel.danmaku
             positionMs: playerController.positionMs
             isPlaying: playerController.isPlaying
             seeking: playerController.seeking
@@ -1923,8 +1923,8 @@ ApplicationWindow {
                         font.bold: true
                     }
                     Text {
-                        text: playerController.dmghgAnimeModel.commentsLoading
-                            ? "加载中..." : (playerController.dmghgAnimeModel.comments.length + " 条")
+                        text: services.dmghgAnimeModel.commentsLoading
+                            ? "加载中..." : (services.dmghgAnimeModel.comments.length + " 条")
                         color: appTheme.textMutedColor
                         font.family: appTheme.fontFamily
                         font.pixelSize: 11
@@ -1935,7 +1935,7 @@ ApplicationWindow {
                         text: "↻"
                         ToolTip.visible: hovered
                         ToolTip.text: "刷新评论"
-                        onClicked: playerController.dmghgAnimeModel.loadComments(window.animePlaybackVodId, 1)
+                        onClicked: services.dmghgAnimeModel.loadComments(window.animePlaybackVodId, 1)
                     }
                     ToolButton {
                         text: "×"
@@ -1953,7 +1953,7 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     clip: true
                     spacing: 8
-                    model: playerController.dmghgAnimeModel.comments
+                    model: services.dmghgAnimeModel.comments
                     delegate: Rectangle {
                         width: ListView.view.width
                         height: drawerCommentColumn.implicitHeight + 18
@@ -2005,8 +2005,8 @@ ApplicationWindow {
 
                 Text {
                     Layout.fillWidth: true
-                    visible: !playerController.dmghgAnimeModel.commentsLoading
-                        && playerController.dmghgAnimeModel.comments.length === 0
+                    visible: !services.dmghgAnimeModel.commentsLoading
+                        && services.dmghgAnimeModel.comments.length === 0
                     text: "暂无评论"
                     color: appTheme.textMutedColor
                     horizontalAlignment: Text.AlignHCenter
@@ -2039,7 +2039,7 @@ ApplicationWindow {
             emptyState: playerController.currentFile.length === 0
             playlistModel: playerController.playlistModel
             currentIndex: playerController.currentIndex
-            apiSiteModel: playerController.apiSiteModel
+            apiSiteModel: services.apiSiteModel
             sourceSearchModel: playerController.sourceSearchModel
             currentVodName: playerController.currentVodName
             audioTracks: playerController.audioTracks

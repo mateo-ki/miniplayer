@@ -147,7 +147,7 @@ Rectangle {
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
                                             root.closeCategoryPopup()
-                                            playerController.apiSiteModel.selectAt(model.sourceIndex)
+                                            services.apiSiteModel.selectAt(model.sourceIndex)
                                             sitePopup.close()
                                             root.detailActive = false
                                             root.selectedTypeId = ""
@@ -365,7 +365,7 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             root.closeCategoryPopup()
-                            playerController.apiSiteModel.selectAt(model.sourceIndex)
+                            services.apiSiteModel.selectAt(model.sourceIndex)
                             root.siteDropdownOpen = false
                             root.detailActive = false
                             root.selectedTypeId = ""
@@ -967,35 +967,35 @@ Rectangle {
 
     function rebuildVideoSites() {
         videoSiteList.clear()
-        for (var i = 0; i < playerController.apiSiteModel.count; ++i) {
-            if (playerController.apiSiteModel.typeAt(i) !== "video") continue
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) !== "video") continue
             videoSiteList.append({
                 "sourceIndex": i,
-                "siteName": playerController.apiSiteModel.nameAt(i),
-                "siteBaseUrl": playerController.apiSiteModel.baseUrlAt(i),
-                "sitePremium": playerController.apiSiteModel.premiumAt(i)
+                "siteName": services.apiSiteModel.nameAt(i),
+                "siteBaseUrl": services.apiSiteModel.baseUrlAt(i),
+                "sitePremium": services.apiSiteModel.premiumAt(i)
             })
         }
     }
 
     function firstVideoSiteIndex() {
-        for (var i = 0; i < playerController.apiSiteModel.count; ++i) {
-            if (playerController.apiSiteModel.typeAt(i) === "video") return i
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) === "video") return i
         }
         return -1
     }
 
     function ensureVideoSiteSelected() {
-        var current = playerController.apiSiteModel.currentIndex
-        if (current >= 0 && playerController.apiSiteModel.typeAt(current) === "video") return current
+        var current = services.apiSiteModel.currentIndex
+        if (current >= 0 && services.apiSiteModel.typeAt(current) === "video") return current
         var first = root.firstVideoSiteIndex()
-        if (first >= 0) playerController.apiSiteModel.selectAt(first)
+        if (first >= 0) services.apiSiteModel.selectAt(first)
         return first
     }
 
     function currentVideoSiteIndex() {
-        var current = playerController.apiSiteModel.currentIndex
-        if (current >= 0 && playerController.apiSiteModel.typeAt(current) === "video") {
+        var current = services.apiSiteModel.currentIndex
+        if (current >= 0 && services.apiSiteModel.typeAt(current) === "video") {
             return current
         }
         return root.firstVideoSiteIndex()
@@ -1003,7 +1003,7 @@ Rectangle {
     function selectedVideoSiteName() {
         var current = root.currentVideoSiteIndex()
         if (current >= 0) {
-            return playerController.apiSiteModel.nameAt(current)
+            return services.apiSiteModel.nameAt(current)
         }
         return "暂无视频站点"
     }
@@ -1044,7 +1044,7 @@ Rectangle {
 
 
     Connections {
-        target: playerController.apiSiteModel
+        target: services.apiSiteModel
         function onCurrentIndexChanged() {
             root.closeCategoryPopup()
             root.rebuildVideoSites()

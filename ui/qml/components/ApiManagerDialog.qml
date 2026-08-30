@@ -79,7 +79,7 @@ Dialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: playerController.apiSiteModel
+            model: services.apiSiteModel
             spacing: 4
 
             delegate: Rectangle {
@@ -87,7 +87,7 @@ Dialog {
                 height: 56
                 radius: 6
                 color: siteMouse.containsMouse ? theme.panelRaisedColor : theme.surfaceColor
-                border.color: playerController.apiSiteModel.currentIndex === index ? theme.accentColor : theme.borderColor
+                border.color: services.apiSiteModel.currentIndex === index ? theme.accentColor : theme.borderColor
                 border.width: 1
 
                 RowLayout {
@@ -99,7 +99,7 @@ Dialog {
                         Layout.preferredWidth: 28
                         Layout.preferredHeight: 28
                         checked: model.shareSelected
-                        onToggled: playerController.apiSiteModel.setShareSelected(index, checked)
+                        onToggled: services.apiSiteModel.setShareSelected(index, checked)
                         ToolTip.visible: hovered
                         ToolTip.text: "勾选后可分享"
                     }
@@ -113,7 +113,7 @@ Dialog {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: playerController.apiSiteModel.selectAt(index)
+                            onClicked: services.apiSiteModel.selectAt(index)
                         }
 
                         ColumnLayout {
@@ -172,14 +172,14 @@ Dialog {
                         Layout.preferredHeight: 28
                         radius: 4
                         color: delBtnMouse.containsMouse ? theme.dangerColor : "transparent"
-                        visible: playerController.apiSiteModel.count > 1
+                        visible: services.apiSiteModel.count > 1
 
                         MouseArea {
                             id: delBtnMouse
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: playerController.apiSiteModel.removeAt(index)
+                            onClicked: services.apiSiteModel.removeAt(index)
                         }
 
                         Text {
@@ -200,7 +200,7 @@ Dialog {
             PillButton {
                 label: "全选"
                 onClicked: {
-                    playerController.apiSiteModel.selectAllForShare(true)
+                    services.apiSiteModel.selectAllForShare(true)
                     root.shareMessage = "已全选站点"
                 }
             }
@@ -208,7 +208,7 @@ Dialog {
             PillButton {
                 label: "清空"
                 onClicked: {
-                    playerController.apiSiteModel.selectAllForShare(false)
+                    services.apiSiteModel.selectAllForShare(false)
                     root.shareMessage = "已清空选择"
                 }
             }
@@ -219,12 +219,12 @@ Dialog {
                 hoverColor: theme.accentMutedColor
                 labelColor: "#ffffff"
                 outlined: false
-                onClicked: root.shareMessage = playerController.apiSiteModel.shareSelectedToClipboard()
+                onClicked: root.shareMessage = services.apiSiteModel.shareSelectedToClipboard()
             }
 
             PillButton {
                 label: "从剪贴板导入"
-                onClicked: root.shareMessage = playerController.apiSiteModel.importSitesFromClipboard()
+                onClicked: root.shareMessage = services.apiSiteModel.importSitesFromClipboard()
             }
 
             Item { Layout.fillWidth: true }
@@ -313,10 +313,10 @@ Dialog {
                             var u = urlInput.text.trim()
                             if (n.length === 0 || u.length === 0) return
                             if (root.isEditing) {
-                                playerController.apiSiteModel.update(root.editIndex, n, u)
+                                services.apiSiteModel.update(root.editIndex, n, u)
                                 root.editIndex = -1
                             } else {
-                                playerController.apiSiteModel.add(n, u)
+                                services.apiSiteModel.add(n, u)
                             }
                             nameInput.text = ""
                             urlInput.text = ""
@@ -369,7 +369,7 @@ Dialog {
     }
 
     onOpened: {
-        root.shareMessage = playerController.apiSiteModel.hasShareContentInClipboard()
+        root.shareMessage = services.apiSiteModel.hasShareContentInClipboard()
                 ? "剪贴板里检测到 MeloBox 加密站点分享，可直接导入"
                 : ""
     }

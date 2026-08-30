@@ -24,8 +24,8 @@ Item {
 
     function siteCount(typeName) {
         var count = 0
-        for (var i = 0; i < root.controller.apiSiteModel.count; ++i) {
-            if (root.controller.apiSiteModel.typeAt(i) === typeName)
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            if (services.apiSiteModel.typeAt(i) === typeName)
                 count++
         }
         return count
@@ -34,7 +34,7 @@ Item {
     function summaryCards() {
         return [
             { label: "功能模块", value: moduleCards().length },
-            { label: "总站点", value: root.controller.apiSiteModel.count },
+            { label: "总站点", value: services.apiSiteModel.count },
             { label: "视频站点", value: siteCount("video") },
             { label: "图片站点", value: siteCount("image") }
         ]
@@ -46,10 +46,10 @@ Item {
             { title: "图片", desc: "浏览随机图片并管理图片来源", count: siteCount("image"), unit: "站点", page: 4 },
             { title: "短视频", desc: "连续播放短视频并快速切换来源", count: shortVideoSourceCount, unit: "来源", page: 6 },
             { title: "音乐", desc: "搜索歌曲、管理队列并查看歌词", count: root.controller.musicResults.length, unit: "曲目", page: 10 },
-            { title: "下载", desc: "管理视频和音频下载任务", count: root.controller.downloadModel.count, unit: "任务", page: 3 },
+            { title: "下载", desc: "管理视频和音频下载任务", count: services.downloadModel.count, unit: "任务", page: 3 },
             { title: "历史", desc: "继续播放最近打开的媒体内容", count: root.controller.historyModel.count, unit: "记录", page: 2 },
             { title: "表情包", desc: "搜索、预览和保存表情图片", count: memeSourceCount, unit: "接口", page: 5 },
-            { title: "站点管理", desc: "检测、筛选并维护媒体 API 站点", count: root.controller.apiSiteModel.count, unit: "站点", page: 9 }
+            { title: "站点管理", desc: "检测、筛选并维护媒体 API 站点", count: services.apiSiteModel.count, unit: "站点", page: 9 }
         ]
     }
 

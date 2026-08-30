@@ -83,7 +83,7 @@ void ensureWindowOnScreen(QQuickWindow *window) {
 }
 
 AppBootstrap::AppBootstrap(QObject *parent)
-    : QObject(parent) {
+    : QObject(parent), m_playerController(&m_services) {
 }
 
 QString AppBootstrap::instanceServerName() {
@@ -287,6 +287,7 @@ void AppBootstrap::registerQmlTypes() {
 
 void AppBootstrap::exposeContextProperties() {
     m_engine.rootContext()->setContextProperty("playerController", &m_playerController);
+    m_engine.rootContext()->setContextProperty("services", &m_services);
 }
 
 bool AppBootstrap::loadMainWindow() {

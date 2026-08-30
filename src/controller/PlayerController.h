@@ -14,18 +14,12 @@
 #include "models/PlaylistModel.h"
 #include "models/RuntimeLogModel.h"
 #include "models/VideoSearchModel.h"
-#include "models/ApiSiteModel.h"
-#include "models/DmghgAnimeModel.h"
-#include "models/BeeVideoModel.h"
-#include "models/BeeScheduleModel.h"
-#include "models/DownloadModel.h"
-#include "models/LegadoSourceModel.h"
-#include "models/LegadoBookModel.h"
 #include "mpv/MpvBackend.h"
 #include "media/ImageCacheService.h"
 
 class VideoFrameBridge;
 class HlsPlaylistProxy;
+class AppServices;
 class QAudioOutput;
 class QMediaPlayer;
 class QNetworkReply;
@@ -72,13 +66,6 @@ public:
     Q_PROPERTY(VideoSearchModel *videoSearchModel READ videoSearchModel CONSTANT)
     Q_PROPERTY(VideoSearchModel *detailSearchModel READ detailSearchModel CONSTANT)
     Q_PROPERTY(VideoSearchModel *sourceSearchModel READ sourceSearchModel CONSTANT)
-    Q_PROPERTY(ApiSiteModel *apiSiteModel READ apiSiteModel CONSTANT)
-    Q_PROPERTY(DmghgAnimeModel *dmghgAnimeModel READ dmghgAnimeModel CONSTANT)
-    Q_PROPERTY(BeeVideoModel *beeVideoModel READ beeVideoModel CONSTANT)
-    Q_PROPERTY(BeeScheduleModel *beeScheduleModel READ beeScheduleModel CONSTANT)
-    Q_PROPERTY(DownloadModel *downloadModel READ downloadModel CONSTANT)
-    Q_PROPERTY(LegadoSourceModel *legadoSourceModel READ legadoSourceModel CONSTANT)
-    Q_PROPERTY(LegadoBookModel *legadoBookModel READ legadoBookModel CONSTANT)
     Q_PROPERTY(QString currentVodName READ currentVodName NOTIFY currentVodNameChanged)
     Q_PROPERTY(bool imageLoading READ imageLoading NOTIFY imageStateChanged)
     Q_PROPERTY(QString currentImageUrl READ currentImageUrl NOTIFY imageStateChanged)
@@ -122,7 +109,8 @@ public:
     Q_PROPERTY(QString sourceSwitchCandidate READ sourceSwitchCandidate NOTIFY sourceSwitchSuggestionChanged)
 
 public:
-    explicit PlayerController(QObject *parent = nullptr);
+    // services 为组合根持有的功能模型容器，生命周期必须长于本对象。
+    explicit PlayerController(AppServices *services, QObject *parent = nullptr);
 
     bool isPlaying() const;
     bool isPaused() const;
@@ -157,13 +145,6 @@ public:
     VideoSearchModel *videoSearchModel();
     VideoSearchModel *detailSearchModel();
     VideoSearchModel *sourceSearchModel();
-    ApiSiteModel *apiSiteModel();
-    DmghgAnimeModel *dmghgAnimeModel();
-    BeeVideoModel *beeVideoModel();
-    BeeScheduleModel *beeScheduleModel();
-    DownloadModel *downloadModel();
-    LegadoSourceModel *legadoSourceModel();
-    LegadoBookModel *legadoBookModel();
     QString currentVodName() const;
     bool imageLoading() const;
     QString currentImageUrl() const;
@@ -324,6 +305,7 @@ signals:
     void sourceSwitchSuggestionChanged();
 
 private:
+    AppServices *services_ = nullptr;  // 功能模型容器（非持有）
     PlayerEngine engine_;
     MediaInfoModel mediaInfoModel_;
     PlaylistModel playlistModel_;
@@ -332,13 +314,6 @@ private:
     VideoSearchModel videoSearchModel_;
     VideoSearchModel detailSearchModel_;
     VideoSearchModel sourceSearchModel_;
-    ApiSiteModel apiSiteModel_;
-    DmghgAnimeModel dmghgAnimeModel_;
-    BeeVideoModel beeVideoModel_;
-    BeeScheduleModel beeScheduleModel_;
-    DownloadModel downloadModel_;
-    LegadoSourceModel legadoSourceModel_;
-    LegadoBookModel legadoBookModel_;
     ImageCacheService imageCache_;
     MpvBackend mpvBackend_;
     QMediaPlayer *qtPlayer_ = nullptr;

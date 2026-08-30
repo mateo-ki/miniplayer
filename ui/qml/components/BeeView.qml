@@ -11,8 +11,8 @@ Rectangle {
     property var controller
     property var theme
     property var sidebar
-    readonly property var model: controller ? controller.beeVideoModel : null
-    readonly property var schedule: controller ? controller.beeScheduleModel : null
+    readonly property var model: controller ? services.beeVideoModel : null
+    readonly property var schedule: controller ? services.beeScheduleModel : null
     property string selectedId: ""
     property bool detailActive: false
 

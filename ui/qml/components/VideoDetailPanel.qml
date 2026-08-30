@@ -82,8 +82,8 @@ Rectangle {
         if (url.indexOf("//") === 0) return "https:" + url
         if (url.indexOf("://") > 0) return url
 
-        var current = playerController.apiSiteModel.currentIndex
-        var base = current >= 0 ? playerController.apiSiteModel.baseUrlAt(current) : ""
+        var current = services.apiSiteModel.currentIndex
+        var base = current >= 0 ? services.apiSiteModel.baseUrlAt(current) : ""
         if (!base || base.length === 0) return url
 
         var match = base.match(/^(https?:\/\/[^\/]+)/)

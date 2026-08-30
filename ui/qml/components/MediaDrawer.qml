@@ -504,7 +504,7 @@ Rectangle {
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.searchSourceSite(root.sourceSiteIndex >= 0 ? root.sourceSiteIndex : playerController.apiSiteModel.currentIndex)
+                                onClicked: root.searchSourceSite(root.sourceSiteIndex >= 0 ? root.sourceSiteIndex : services.apiSiteModel.currentIndex)
                             }
 
                             Text {

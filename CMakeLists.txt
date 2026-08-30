@@ -126,6 +126,7 @@ endforeach()
 qt_add_executable(MeloBox
     src/app/main.cpp
     src/app/AppBootstrap.cpp
+    src/app/AppServices.cpp
     src/controller/PlayerController.cpp
     src/media/ImageCacheService.cpp
 )
@@ -429,6 +430,7 @@ if(MELOBOX_ENABLE_FFMPEG)
         add_executable(miniPlayerCoreTests
             src/common/constant.h
             tests/unit/models/ModelTests.cpp
+            src/app/AppServices.cpp
             src/controller/PlayerController.cpp
             src/mpv/MpvBackend.cpp
             src/core/PlayerEngine.cpp
@@ -596,12 +598,18 @@ if (MSVC AND MELOBOX_ENABLE_RUNTIME_DEPLOYMENT)
 
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                 # Deploy QML import modules so the build output can run directly.
-                COMMAND "${_miniPlayerWinDeployQt}"
-                    "$<IF:$<CONFIG:Debug>,--debug,--release>"
-                    "--no-translations"
-                    "--qmldir"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/ui/qml"
-                    "$<TARGET_FILE:${PROJECT_NAME}>"
+                # windeployqt infers the Qt bin dir from its own location and
+                # cannot see vcpkg's debug DLLs, so Debug builds copy the
+                # debug QML module tree directly (see cmake/DeployRuntime.cmake);
+                # a failing deployment would abort the whole POST_BUILD chain
+                # and leave the platform plugin missing.
+                COMMAND ${CMAKE_COMMAND}
+                    -DMELOBOX_BUILD_CONFIG=$<CONFIG>
+                    -DMELOBOX_QT_PLUGIN_BASE=${_miniPlayerQtPluginBase}
+                    -DMELOBOX_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                    -DMELOBOX_TARGET=$<TARGET_FILE:${PROJECT_NAME}>
+                    -DMELOBOX_TARGET_FILE_DIR=$<TARGET_FILE_DIR:${PROJECT_NAME}>
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeployRuntime.cmake
 
                 # Keep only the Basic Qt Quick Controls style used by the app.
                 # windeployqt deploys every style by default, which adds many MB
@@ -779,11 +787,11 @@ if (MSVC AND MELOBOX_ENABLE_RUNTIME_DEPLOYMENT)
                 # Qt Quick Controls QML plugins may not be discovered by
                 # windeployqt when imports come from the generated qrc module.
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_miniPlayerQtBinDir}/Qt6QuickControls2.dll"
-                "${_miniPlayerQtBinDir}/Qt6QuickTemplates2.dll"
-                "${_miniPlayerQtBinDir}/Qt6QuickControls2Basic.dll"
-                "${_miniPlayerQtBinDir}/Qt6QuickControls2BasicStyleImpl.dll"
-                "${_miniPlayerQtBinDir}/Qt6QuickControls2Impl.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickTemplates2$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2Basic$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2BasicStyleImpl$<$<CONFIG:Debug>:d>.dll"
+                "${_miniPlayerQtBinDir}/Qt6QuickControls2Impl$<$<CONFIG:Debug>:d>.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 
                 # MSVC runtime side-by-side DLLs required by the vcpkg Qt build.

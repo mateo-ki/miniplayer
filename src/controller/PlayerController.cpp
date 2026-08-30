@@ -1,5 +1,7 @@
 #include "controller/PlayerController.h"
 
+#include "app/AppServices.h"
+
 #include <QFileDialog>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -121,8 +123,8 @@ QString normalizeVersion(QString version) {
 }
 }
 
-PlayerController::PlayerController(QObject *parent)
-    : QObject(parent) {
+PlayerController::PlayerController(AppServices *services, QObject *parent)
+    : QObject(parent), services_(services) {
     Logger::instance().setSink([this](const QString &level, const QString &message) {
         runtimeLogModel_.append(level, message);
     });
@@ -280,24 +282,23 @@ PlayerController::PlayerController(QObject *parent)
         if (shortVideoFailed)
             emit playbackFailed(message);
    });
-    connect(&apiSiteModel_, &ApiSiteModel::currentIndexChanged, this, [this]() {
-        Logger::instance().info("API site changed, loading default VOD list: " + apiSiteModel_.currentBaseUrl());
+    connect(services_->apiSiteModel(), &ApiSiteModel::currentIndexChanged, this, [this]() {
+        Logger::instance().info("API site changed, loading default VOD list: " + services_->apiSiteModel()->currentBaseUrl());
         videoSearchModel_.clear();
         loadVideoList(1);
     });
 
     // 书源（Legado 阅读规则）：选中源变化时重建书籍模型；音频章节交给播放器
-    legadoBookModel_.setSourceModel(&legadoSourceModel_);
-    connect(&legadoSourceModel_, &LegadoSourceModel::activeSourceChanged, this, [this]() {
-        legadoBookModel_.applyActiveSource();
+    connect(services_->legadoSourceModel(), &LegadoSourceModel::activeSourceChanged, this, [this]() {
+        services_->legadoBookModel()->applyActiveSource();
     });
-    connect(&legadoBookModel_, &LegadoBookModel::playbackRequested, this,
+    connect(services_->legadoBookModel(), &LegadoBookModel::playbackRequested, this,
         [this](const QString &url, const QString &title) {
             setCurrentVodName(title);
             playVodUrl(url);
         });
-    if (legadoSourceModel_.hasSelected())
-        legadoBookModel_.applyActiveSource();
+    if (services_->legadoSourceModel()->hasSelected())
+        services_->legadoBookModel()->applyActiveSource();
 
     wireEngineSignals();
     loadSettings();
@@ -1170,13 +1171,6 @@ void PlayerController::wireEngineSignals() {
 
 VideoSearchModel *PlayerController::videoSearchModel() { return &videoSearchModel_; }
 VideoSearchModel *PlayerController::detailSearchModel() { return &detailSearchModel_; }
-ApiSiteModel *PlayerController::apiSiteModel() { return &apiSiteModel_; }
-DmghgAnimeModel *PlayerController::dmghgAnimeModel() { return &dmghgAnimeModel_; }
-BeeVideoModel *PlayerController::beeVideoModel() { return &beeVideoModel_; }
-BeeScheduleModel *PlayerController::beeScheduleModel() { return &beeScheduleModel_; }
-DownloadModel *PlayerController::downloadModel() { return &downloadModel_; }
-LegadoSourceModel *PlayerController::legadoSourceModel() { return &legadoSourceModel_; }
-LegadoBookModel *PlayerController::legadoBookModel() { return &legadoBookModel_; }
 
 void PlayerController::searchCurrentVodOnSite(int siteIndex) {
     if (currentVodName_.trimmed().isEmpty()) {
@@ -1184,7 +1178,7 @@ void PlayerController::searchCurrentVodOnSite(int siteIndex) {
         return;
     }
 
-    const QString baseUrl = apiSiteModel_.baseUrlAt(siteIndex);
+    const QString baseUrl = services_->apiSiteModel()->baseUrlAt(siteIndex);
     if (baseUrl.isEmpty()) {
         Logger::instance().error("Invalid API site index for source search: " + QString::number(siteIndex));
         return;
@@ -1195,11 +1189,11 @@ void PlayerController::searchCurrentVodOnSite(int siteIndex) {
 }
 
 void PlayerController::downloadVideoEpisodes(const QString &vodName, const QString &poster, const QVariantList &episodes) {
-    downloadModel_.enqueueVideo(vodName, poster, episodes);
+    services_->downloadModel()->enqueueVideo(vodName, poster, episodes);
 }
 
 void PlayerController::saveVideoM3u8Episodes(const QString &vodName, const QString &poster, const QVariantList &episodes) {
-    downloadModel_.enqueueVideoM3u8Only(vodName, poster, episodes);
+    services_->downloadModel()->enqueueVideoM3u8Only(vodName, poster, episodes);
 }
 
 void PlayerController::downloadCurrentPlaylist() {
@@ -1216,7 +1210,7 @@ void PlayerController::downloadCurrentPlaylist() {
     const QString name = currentVodName_.trimmed().isEmpty()
         ? QStringLiteral("当前播放")
         : currentVodName_;
-    downloadModel_.enqueueVideo(name, QString(), episodes);
+    services_->downloadModel()->enqueueVideo(name, QString(), episodes);
 }
 
 void PlayerController::saveCurrentPlaylistM3u8() {
@@ -1233,11 +1227,11 @@ void PlayerController::saveCurrentPlaylistM3u8() {
     const QString name = currentVodName_.trimmed().isEmpty()
         ? QStringLiteral("当前播放")
         : currentVodName_;
-    downloadModel_.enqueueVideoM3u8Only(name, QString(), episodes);
+    services_->downloadModel()->enqueueVideoM3u8Only(name, QString(), episodes);
 }
 
 void PlayerController::searchVideos(const QString &keyword, int page, bool forceRefresh) {
-    QString baseUrl = apiSiteModel_.currentVideoBaseUrl();
+    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
     if (baseUrl.isEmpty()) {
         Logger::instance().error("No API site configured");
         return;
@@ -1247,7 +1241,7 @@ void PlayerController::searchVideos(const QString &keyword, int page, bool force
 }
 
 void PlayerController::searchVideoById(const QString &vodId) {
-    QString baseUrl = apiSiteModel_.currentVideoBaseUrl();
+    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
     if (baseUrl.isEmpty()) {
         Logger::instance().error("No API site configured");
         return;
@@ -1261,7 +1255,7 @@ void PlayerController::loadVideoDetail(int vodId) {
         Logger::instance().warn("Invalid VOD id for detail: " + QString::number(vodId));
         return;
     }
-    QString baseUrl = apiSiteModel_.currentVideoBaseUrl();
+    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
     if (baseUrl.isEmpty()) {
         Logger::instance().error("No API site configured");
         return;
@@ -1271,7 +1265,7 @@ void PlayerController::loadVideoDetail(int vodId) {
 }
 
 void PlayerController::loadVideoList(int page) {
-    QString baseUrl = apiSiteModel_.currentVideoBaseUrl();
+    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
     if (baseUrl.isEmpty()) {
         Logger::instance().error("No API site configured");
         return;
@@ -1281,7 +1275,7 @@ void PlayerController::loadVideoList(int page) {
 }
 
 void PlayerController::loadVideoListByCategory(const QString &typeId, int page) {
-    QString baseUrl = apiSiteModel_.currentVideoBaseUrl();
+    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
     if (baseUrl.isEmpty()) {
         Logger::instance().error("No API site configured");
         return;
@@ -1680,11 +1674,11 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
     lastImageLoadRequestMs_ = QDateTime::currentMSecsSinceEpoch();
 
     const QString apiUrl = requestedApiUrl.trimmed().isEmpty()
-        ? apiSiteModel_.imageBaseUrl().trimmed()
+        ? services_->apiSiteModel()->imageBaseUrl().trimmed()
         : requestedApiUrl.trimmed();
     Logger::instance().info(QStringLiteral("[ImageDebug] loadRandomImage api=%1 currentSiteIndex=%2")
         .arg(apiUrl)
-        .arg(apiSiteModel_.currentIndex()));
+        .arg(services_->apiSiteModel()->currentIndex()));
     if (apiUrl.isEmpty()) {
         setImageState(false, currentImageUrl_, QStringLiteral("没有配置图片站点"));
         return;
@@ -1747,7 +1741,7 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
             currentImageContentType_ = contentType;
             const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
             const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
-            const QString localPath = cacheImageBytes(apiSiteModel_.imageBaseUrl().trimmed(), reply->url().toString(), bytes, effectiveMime);
+            const QString localPath = cacheImageBytes(services_->apiSiteModel()->imageBaseUrl().trimmed(), reply->url().toString(), bytes, effectiveMime);
             emit imageCacheChanged();
             const QString displayUrl = localPath.isEmpty()
                 ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
@@ -1793,7 +1787,7 @@ void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
             currentImageContentType_ = imageContentType.isEmpty() ? QStringLiteral("image/png") : imageContentType;
             const QString mime = currentImageContentType_.section(QLatin1Char(';'), 0, 0).trimmed();
             const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
-            const QString localPath = cacheImageBytes(apiSiteModel_.imageBaseUrl().trimmed(), finalImageUrl, imageBytes, effectiveMime);
+            const QString localPath = cacheImageBytes(services_->apiSiteModel()->imageBaseUrl().trimmed(), finalImageUrl, imageBytes, effectiveMime);
             emit imageCacheChanged();
             const QString displayUrl = localPath.isEmpty()
                 ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,

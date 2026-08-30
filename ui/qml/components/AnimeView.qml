@@ -22,7 +22,7 @@ Rectangle {
     property int currentEpisodePage: 0
     property string selectedType: ""
     property int selectedChannel: 0
-    readonly property var model: controller ? controller.dmghgAnimeModel : null
+    readonly property var model: controller ? services.dmghgAnimeModel : null
     // 控制器注入前页面可能先完成一轮绑定，使用空模型避免状态栏/详情绑定访问 null。
     readonly property var emptyModel: ({
         loading: false, totalCount: 0, count: 0, currentPage: 1, totalPages: 1,

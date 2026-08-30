@@ -5,6 +5,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include "app/AppServices.h"
 #include "controller/PlayerController.h"
 #include "infrastructure/Logger.h"
 #include "models/ApiSiteModel.h"
@@ -130,7 +131,8 @@ void PlayerControllerTests::initTestCase() {
 }
 
 void PlayerControllerTests::exposesInitialIdleState() {
-    PlayerController controller;
+    AppServices services;
+    PlayerController controller(&services);
 
     QCOMPARE(controller.isPlaying(), false);
     QCOMPARE(controller.isPaused(), false);
@@ -143,7 +145,8 @@ void PlayerControllerTests::exposesInitialIdleState() {
 }
 
 void PlayerControllerTests::playPauseStopUpdateState() {
-    PlayerController controller;
+    AppServices services;
+    PlayerController controller(&services);
 
     controller.play();
     QCOMPARE(controller.isPlaying(), true);
@@ -160,7 +163,8 @@ void PlayerControllerTests::playPauseStopUpdateState() {
 }
 
 void PlayerControllerTests::vodSelectionPublishesTargetImmediately() {
-    PlayerController controller;
+    AppServices services;
+    PlayerController controller(&services);
     const QString url = QStringLiteral("https://media.example.com/episode.m3u8");
 
     controller.playVodUrl(url);

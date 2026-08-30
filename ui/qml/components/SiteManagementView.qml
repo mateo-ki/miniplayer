@@ -56,7 +56,7 @@ Rectangle {
                 if (pointerContentY - hoveredTop >= 41)
                     insertSlot += 1
             }
-            if (root.controller.apiSiteModel.moveSiteToSlot(sourceIndex, insertSlot)) {
+            if (services.apiSiteModel.moveSiteToSlot(sourceIndex, insertSlot)) {
                 root.message = "已调整站点顺序"
             }
         }
@@ -153,19 +153,19 @@ Rectangle {
     function refreshFilteredSites() {
         var previousContentY = siteList.contentY
         filteredSiteList.clear()
-        for (var i = 0; i < root.controller.apiSiteModel.count; ++i) {
-            var siteType = root.controller.apiSiteModel.typeAt(i)
-            if (!root.controller.apiSiteModel.matchesFilter(i, siteSearchInput.text)) continue
+        for (var i = 0; i < services.apiSiteModel.count; ++i) {
+            var siteType = services.apiSiteModel.typeAt(i)
+            if (!services.apiSiteModel.matchesFilter(i, siteSearchInput.text)) continue
             if (!root.matchesTypeFilter(siteType)) continue
             filteredSiteList.append({
                 "sourceIndex": i,
-                "name": root.controller.apiSiteModel.nameAt(i),
-                "baseUrl": root.controller.apiSiteModel.baseUrlAt(i),
+                "name": services.apiSiteModel.nameAt(i),
+                "baseUrl": services.apiSiteModel.baseUrlAt(i),
                 "siteType": siteType,
-                "premium": root.controller.apiSiteModel.premiumAt(i),
-                "shareSelected": root.controller.apiSiteModel.shareSelectedAt(i),
-                "accessStatus": root.controller.apiSiteModel.accessStatusAt(i),
-                "accessStatusText": root.controller.apiSiteModel.accessStatusTextAt(i)
+                "premium": services.apiSiteModel.premiumAt(i),
+                "shareSelected": services.apiSiteModel.shareSelectedAt(i),
+                "accessStatus": services.apiSiteModel.accessStatusAt(i),
+                "accessStatusText": services.apiSiteModel.accessStatusTextAt(i)
             })
         }
         Qt.callLater(function() {
@@ -189,9 +189,9 @@ Rectangle {
     }
 
     function syncFilteredSite(sourceIndex) {
-        if (sourceIndex < 0 || sourceIndex >= root.controller.apiSiteModel.count) return
-        var siteType = root.controller.apiSiteModel.typeAt(sourceIndex)
-        var matches = root.controller.apiSiteModel.matchesFilter(sourceIndex, siteSearchInput.text)
+        if (sourceIndex < 0 || sourceIndex >= services.apiSiteModel.count) return
+        var siteType = services.apiSiteModel.typeAt(sourceIndex)
+        var matches = services.apiSiteModel.matchesFilter(sourceIndex, siteSearchInput.text)
                       && root.matchesTypeFilter(siteType)
         var filteredIndex = root.filteredIndexForSource(sourceIndex)
         if (!matches) {
@@ -201,13 +201,13 @@ Rectangle {
 
         var siteData = {
             "sourceIndex": sourceIndex,
-            "name": root.controller.apiSiteModel.nameAt(sourceIndex),
-            "baseUrl": root.controller.apiSiteModel.baseUrlAt(sourceIndex),
+            "name": services.apiSiteModel.nameAt(sourceIndex),
+            "baseUrl": services.apiSiteModel.baseUrlAt(sourceIndex),
             "siteType": siteType,
-            "premium": root.controller.apiSiteModel.premiumAt(sourceIndex),
-            "shareSelected": root.controller.apiSiteModel.shareSelectedAt(sourceIndex),
-            "accessStatus": root.controller.apiSiteModel.accessStatusAt(sourceIndex),
-            "accessStatusText": root.controller.apiSiteModel.accessStatusTextAt(sourceIndex)
+            "premium": services.apiSiteModel.premiumAt(sourceIndex),
+            "shareSelected": services.apiSiteModel.shareSelectedAt(sourceIndex),
+            "accessStatus": services.apiSiteModel.accessStatusAt(sourceIndex),
+            "accessStatusText": services.apiSiteModel.accessStatusTextAt(sourceIndex)
         }
         if (filteredIndex >= 0) {
             for (var key in siteData) filteredSiteList.setProperty(filteredIndex, key, siteData[key])
@@ -221,7 +221,7 @@ Rectangle {
     }
 
     Connections {
-        target: root.controller.apiSiteModel
+        target: services.apiSiteModel
         function onCountChanged() { root.refreshFilteredSites() }
         function onDataChanged(topLeft, bottomRight) {
             for (var row = topLeft.row; row <= bottomRight.row; ++row) root.syncFilteredSite(row)
@@ -310,12 +310,12 @@ Rectangle {
                 }
 
                 ActionButton {
-                    label: root.controller.apiSiteModel.remoteSitesLoading ? "加载中..." : "加载站点"
-                    enabledState: !root.controller.apiSiteModel.remoteSitesLoading
-                                  && !root.controller.apiSiteModel.jsonSitesLoading
+                    label: services.apiSiteModel.remoteSitesLoading ? "加载中..." : "加载站点"
+                    enabledState: !services.apiSiteModel.remoteSitesLoading
+                                  && !services.apiSiteModel.jsonSitesLoading
                     onClicked: {
                         root.message = "正在加载远程站点..."
-                        root.controller.apiSiteModel.loadRemoteSites()
+                        services.apiSiteModel.loadRemoteSites()
                     }
                 }
 
@@ -326,14 +326,14 @@ Rectangle {
                     labelColor: "#ffffff"
                     outlined: false
                     onClicked: {
-                        root.controller.apiSiteModel.refreshAllSiteStatuses()
+                        services.apiSiteModel.refreshAllSiteStatuses()
                         root.message = "正在检测全部站点..."
                     }
                 }
 
                 ActionButton {
                     label: "剪贴板导入"
-                    onClicked: root.message = root.controller.apiSiteModel.importSitesFromClipboard()
+                    onClicked: root.message = services.apiSiteModel.importSitesFromClipboard()
                 }
             }
         }
@@ -373,7 +373,7 @@ Rectangle {
                         ActionButton {
                             label: "全选分享"
                             onClicked: {
-                                root.controller.apiSiteModel.selectAllForShare(true)
+                                services.apiSiteModel.selectAllForShare(true)
                                 root.message = "已全选分享站点"
                             }
                         }
@@ -381,7 +381,7 @@ Rectangle {
                         ActionButton {
                             label: "清空选择"
                             onClicked: {
-                                root.controller.apiSiteModel.selectAllForShare(false)
+                                services.apiSiteModel.selectAllForShare(false)
                                 root.message = "已清空分享选择"
                             }
                         }
@@ -393,7 +393,7 @@ Rectangle {
                             labelColor: "#ffffff"
                             outlined: false
                             onClicked: {
-                                root.message = root.controller.apiSiteModel.removeSelectedSites()
+                                root.message = services.apiSiteModel.removeSelectedSites()
                                 root.resetForm()
                             }
                         }
@@ -404,12 +404,12 @@ Rectangle {
                             hoverColor: theme.accentMutedColor
                             labelColor: "#ffffff"
                             outlined: false
-                            onClicked: root.message = root.controller.apiSiteModel.shareSelectedToClipboard()
+                            onClicked: root.message = services.apiSiteModel.shareSelectedToClipboard()
                         }
 
                         ActionButton {
                             label: "URL 去重"
-                            onClicked: root.message = root.controller.apiSiteModel.deduplicateByUrl()
+                            onClicked: root.message = services.apiSiteModel.deduplicateByUrl()
                         }
                     }
 
@@ -479,7 +479,7 @@ Rectangle {
                             height: 82
                             radius: theme.controlRadius
                             color: rowHover.hovered ? theme.panelRaisedColor : theme.surfaceColor
-                            border.color: root.controller.apiSiteModel.currentIndex === model.sourceIndex ? theme.accentColor : theme.subtleBorderColor
+                            border.color: services.apiSiteModel.currentIndex === model.sourceIndex ? theme.accentColor : theme.subtleBorderColor
                             border.width: 1
                             z: root.reorderSourceIndex === model.sourceIndex ? 10 : 0
                             opacity: root.reorderSourceIndex === model.sourceIndex ? 0.88 : 1.0
@@ -544,7 +544,7 @@ Rectangle {
                                     Layout.preferredWidth: 28
                                     Layout.preferredHeight: 28
                                     checked: model.shareSelected
-                                    onToggled: root.controller.apiSiteModel.setShareSelected(model.sourceIndex, checked)
+                                    onToggled: services.apiSiteModel.setShareSelected(model.sourceIndex, checked)
                                 }
 
                                 Rectangle {
@@ -649,23 +649,23 @@ Rectangle {
                                     labelColor: model.premium ? "#ffd86b" : theme.textSecondaryColor
                                     onClicked: {
                                         var wasPremium = model.premium
-                                        root.controller.apiSiteModel.togglePremium(model.sourceIndex)
+                                        services.apiSiteModel.togglePremium(model.sourceIndex)
                                         root.message = wasPremium ? "已取消优质站点" : "已标记为优质站点"
                                     }
                                 }
 
                                 ActionButton {
                                     label: "选中"
-                                    enabledState: root.controller.apiSiteModel.currentIndex !== model.sourceIndex
+                                    enabledState: services.apiSiteModel.currentIndex !== model.sourceIndex
                                     onClicked: {
-                                        root.controller.apiSiteModel.selectAt(model.sourceIndex)
+                                        services.apiSiteModel.selectAt(model.sourceIndex)
                                         root.message = "已切换到：" + model.name
                                     }
                                 }
 
                                 ActionButton {
                                     label: "检测"
-                                    onClicked: root.controller.apiSiteModel.refreshSiteStatusAt(model.sourceIndex)
+                                    onClicked: services.apiSiteModel.refreshSiteStatusAt(model.sourceIndex)
                                 }
 
                                 ActionButton {
@@ -680,13 +680,13 @@ Rectangle {
 
                                 ActionButton {
                                     label: "删除"
-                                    enabledState: root.controller.apiSiteModel.count > 1
+                                    enabledState: services.apiSiteModel.count > 1
                                     fillColor: theme.dangerColor
                                     hoverColor: theme.dangerColor
                                     labelColor: "#ffffff"
                                     outlined: false
                                     onClicked: {
-                                        root.controller.apiSiteModel.removeAt(model.sourceIndex)
+                                        services.apiSiteModel.removeAt(model.sourceIndex)
                                         root.resetForm()
                                         root.message = "已删除站点"
                                     }
@@ -801,11 +801,11 @@ Rectangle {
                                 }
 
                                 if (root.isEditing) {
-                                    root.controller.apiSiteModel.update(root.editIndex, n, u, root.siteTypeFromInputIndex(typeInput.currentIndex))
+                                    services.apiSiteModel.update(root.editIndex, n, u, root.siteTypeFromInputIndex(typeInput.currentIndex))
                                     root.message = "已保存站点"
                                 } else {
-                                    root.controller.apiSiteModel.add(n, u, root.siteTypeFromInputIndex(typeInput.currentIndex))
-                                    root.controller.apiSiteModel.selectAt(root.controller.apiSiteModel.count - 1)
+                                    services.apiSiteModel.add(n, u, root.siteTypeFromInputIndex(typeInput.currentIndex))
+                                    services.apiSiteModel.selectAt(services.apiSiteModel.count - 1)
                                     root.message = "已添加并选中站点"
                                 }
                                 root.resetForm()
@@ -861,7 +861,7 @@ Rectangle {
 
     Component.onCompleted: {
         root.refreshFilteredSites()
-        if (root.controller.apiSiteModel.hasShareContentInClipboard()) {
+        if (services.apiSiteModel.hasShareContentInClipboard()) {
             root.message = "剪贴板里检测到 MeloBox 加密站点分享，可直接导入"
         }
     }

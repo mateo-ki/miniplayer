@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/AppServices.h"
 #include "controller/PlayerController.h"
 #include <QAbstractNativeEventFilter>
 #include <QObject>
@@ -45,6 +46,7 @@ private:
     void adjustVolume(float delta);
 
     QQmlApplicationEngine m_engine;
+    AppServices m_services;          // 先于播放器构造：功能模型容器
     PlayerController m_playerController;
     QSystemTrayIcon *m_trayIcon = nullptr;
     QMenu *m_trayMenu = nullptr;
