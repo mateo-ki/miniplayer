@@ -74,7 +74,7 @@ Rectangle {
     function searchSourceSite(index) {
         if (!root.apiSiteModel || !root.currentVodName || root.currentVodName.length === 0) return
         root.sourceSiteIndex = index
-        playerController.searchCurrentVodOnSite(index)
+        services.videoCatalog.searchCurrentVodOnSite(index)
         autoHideTimer.stop()
     }
 

@@ -2040,7 +2040,7 @@ ApplicationWindow {
             playlistModel: playerController.playlistModel
             currentIndex: playerController.currentIndex
             apiSiteModel: services.apiSiteModel
-            sourceSearchModel: playerController.sourceSearchModel
+            sourceSearchModel: services.videoCatalog.sourceSearchModel
             currentVodName: playerController.currentVodName
             audioTracks: playerController.audioTracks
             currentAudioTrack: playerController.currentAudioTrack

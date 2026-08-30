@@ -574,9 +574,9 @@ Rectangle {
                 anchors.rightMargin: 4
 
                 Text {
-                    text: playerController.videoSearchModel.loading ? "加载中..." :
-                          (playerController.videoSearchModel.totalCount > 0 ? "共 " + playerController.videoSearchModel.totalCount + " 条结果" : (playerController.videoSearchModel.errorMessage ? "错误: " + playerController.videoSearchModel.errorMessage : ""))
-                    color: playerController.videoSearchModel.errorMessage ? theme.dangerColor : theme.textMutedColor
+                    text: services.videoCatalog.videoSearchModel.loading ? "加载中..." :
+                          (services.videoCatalog.videoSearchModel.totalCount > 0 ? "共 " + services.videoCatalog.videoSearchModel.totalCount + " 条结果" : (services.videoCatalog.videoSearchModel.errorMessage ? "错误: " + services.videoCatalog.videoSearchModel.errorMessage : ""))
+                    color: services.videoCatalog.videoSearchModel.errorMessage ? theme.dangerColor : theme.textMutedColor
                     font.pixelSize: 11
                     font.family: theme.fontFamily
                 }
@@ -593,7 +593,7 @@ Rectangle {
             cellWidth: 200
             cellHeight: 300
             clip: true
-            model: playerController.videoSearchModel
+            model: services.videoCatalog.videoSearchModel
 
             delegate: Rectangle {
                 width: resultGrid.cellWidth - 8
@@ -611,12 +611,12 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                                         onClicked: {
                         playerController.resetMouseCursor()
-                        var vod = playerController.videoSearchModel.itemMapAt(index)
+                        var vod = services.videoCatalog.videoSearchModel.itemMapAt(index)
                         if (!vod) return
                         root.selectedVodId = vod.vodId || 0
                         root.showVodDetail(vod)
                         if (root.selectedVodId > 0) {
-                            playerController.loadVideoDetail(root.selectedVodId)
+                            services.videoCatalog.loadVideoDetail(root.selectedVodId)
                         }
                     }
                 }
@@ -731,7 +731,7 @@ Rectangle {
             // Empty state
             Text {
                 anchors.centerIn: parent
-                text: playerController.videoSearchModel.loading ? "" : "输入关键词搜索视频"
+                text: services.videoCatalog.videoSearchModel.loading ? "" : "输入关键词搜索视频"
                 color: theme.textMutedColor
                 font.pixelSize: 16
                 font.family: theme.fontFamily
@@ -741,7 +741,7 @@ Rectangle {
             // Loading overlay
             BusyIndicator {
                 anchors.centerIn: parent
-                running: playerController.videoSearchModel.loading
+                running: services.videoCatalog.videoSearchModel.loading
                 visible: running
                 width: 48
                 height: 48
@@ -753,10 +753,10 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? 30 : 0
             spacing: 6
-            visible: playerController.videoSearchModel
-                && (playerController.videoSearchModel.currentPage > 1
-                    || playerController.videoSearchModel.currentPage
-                        < playerController.videoSearchModel.totalPages)
+            visible: services.videoCatalog.videoSearchModel
+                && (services.videoCatalog.videoSearchModel.currentPage > 1
+                    || services.videoCatalog.videoSearchModel.currentPage
+                        < services.videoCatalog.videoSearchModel.totalPages)
 
             Item { Layout.fillWidth: true }
 
@@ -776,10 +776,10 @@ Rectangle {
                     id: videoPreviousMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    enabled: !playerController.videoSearchModel.loading
-                        && playerController.videoSearchModel.currentPage > 1
+                    enabled: !services.videoCatalog.videoSearchModel.loading
+                        && services.videoCatalog.videoSearchModel.currentPage > 1
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: root.loadPage(playerController.videoSearchModel.currentPage - 1)
+                    onClicked: root.loadPage(services.videoCatalog.videoSearchModel.currentPage - 1)
                 }
 
                 Text {
@@ -792,7 +792,7 @@ Rectangle {
             }
 
             Text {
-                text: "第 " + playerController.videoSearchModel.currentPage + " 页"
+                text: "第 " + services.videoCatalog.videoSearchModel.currentPage + " 页"
                 color: theme.textMutedColor
                 font.pixelSize: 11
                 font.family: theme.fontFamily
@@ -814,11 +814,11 @@ Rectangle {
                     id: videoNextMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    enabled: !playerController.videoSearchModel.loading
-                        && playerController.videoSearchModel.currentPage
-                            < playerController.videoSearchModel.totalPages
+                    enabled: !services.videoCatalog.videoSearchModel.loading
+                        && services.videoCatalog.videoSearchModel.currentPage
+                            < services.videoCatalog.videoSearchModel.totalPages
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: root.loadPage(playerController.videoSearchModel.currentPage + 1)
+                    onClicked: root.loadPage(services.videoCatalog.videoSearchModel.currentPage + 1)
                 }
 
                 Text {
@@ -856,7 +856,7 @@ Rectangle {
             root.selectedTypeId = ""
             root.selectedParentTypeId = ""
             root.childCategoryTags = []
-            playerController.searchVideos(searchInput.text.trim(), 1, true)
+            services.videoCatalog.searchVideos(searchInput.text.trim(), 1, true)
             return
         }
         loadPage(1)
@@ -898,18 +898,18 @@ Rectangle {
         var keyword = searchInput.text.trim()
         if (keyword.length === 0) {
             if (root.selectedTypeId.length > 0) {
-                playerController.loadVideoListByCategory(root.selectedTypeId, page)
+                services.videoCatalog.loadVideoListByCategory(root.selectedTypeId, page)
                 return
             }
-            playerController.loadVideoList(page)
+            services.videoCatalog.loadVideoList(page)
             return
         }
-        playerController.searchVideos(keyword, page)
+        services.videoCatalog.searchVideos(keyword, page)
     }
 
     function refreshCategoryTags() {
         var tags = [{ "typeId": "", "typeName": "全部" }]
-        var categories = playerController.videoSearchModel.categories || []
+        var categories = services.videoCatalog.videoSearchModel.categories || []
         var hasHierarchy = false
         var selectedTypeExists = root.selectedTypeId.length === 0
         for (var hierarchyIndex = 0; hierarchyIndex < categories.length; ++hierarchyIndex) {
@@ -947,7 +947,7 @@ Rectangle {
 
     function refreshChildCategoryTags() {
         var children = []
-        var categories = playerController.videoSearchModel.categories || []
+        var categories = services.videoCatalog.videoSearchModel.categories || []
         if (root.selectedParentTypeId.length > 0) {
             for (var i = 0; i < categories.length; ++i) {
                 var item = categories[i]
@@ -1064,16 +1064,16 @@ Rectangle {
     }
 
     Connections {
-        target: playerController.videoSearchModel
+        target: services.videoCatalog.videoSearchModel
         function onCategoriesChanged() {
             root.refreshCategoryTags()
         }
     }
 
     Connections {
-        target: playerController.detailSearchModel
+        target: services.videoCatalog.detailSearchModel
         function onDetailReceived(index) {
-            var vod = playerController.detailSearchModel.itemMapAt(index)
+            var vod = services.videoCatalog.detailSearchModel.itemMapAt(index)
             if (!vod || !root.detailActive) return
             if (root.selectedVodId > 0 && vod.vodId !== root.selectedVodId) return
             root.showVodDetail(vod)

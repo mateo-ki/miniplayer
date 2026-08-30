@@ -2,6 +2,10 @@
 
 #include "app/AppServices.h"
 
+#include "common/MediaUtils.h"
+#include "controllers/VoiceController.h"
+#include "controllers/UpdateController.h"
+
 #include <QFileDialog>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -107,13 +111,7 @@ qint64 lyricTimestampMs(const QString &minutes, const QString &seconds, const QS
     return minuteMs + secondMs + normalizedFraction.toLongLong();
 }
 
-QString updaterOwner() {
-    return QStringLiteral(MELOBOX_UPDATE_OWNER).trimmed();
-}
 
-QString updaterRepo() {
-    return QStringLiteral(MELOBOX_UPDATE_REPO).trimmed();
-}
 
 QString normalizeVersion(QString version) {
     version = version.trimmed();
@@ -282,11 +280,20 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
         if (shortVideoFailed)
             emit playbackFailed(message);
    });
-    connect(services_->apiSiteModel(), &ApiSiteModel::currentIndexChanged, this, [this]() {
-        Logger::instance().info("API site changed, loading default VOD list: " + services_->apiSiteModel()->currentBaseUrl());
-        videoSearchModel_.clear();
-        loadVideoList(1);
+    // 语音模块：取数与播放解耦——打断当前播放 + 播放缓存文件
+    connect(services_->voiceController(), &VoiceController::preemptPlaybackRequested, this,
+        [this]() { preemptPlaybackForLocalAudio(); });
+    connect(services_->voiceController(), &VoiceController::playbackRequested, this,
+        &PlayerController::playLocalAudioFile);
+    // 更新器拉起安装包前停止播放
+    connect(services_->updateController(), &UpdateController::installStarted, this,
+        [this]() { stop(); });
+
+    // 当前片名同步给视频目录控制器（换源搜索用）
+    connect(this, &PlayerController::currentVodNameChanged, this, [this]() {
+        services_->videoCatalog()->setCurrentVodName(currentVodName_);
     });
+    services_->videoCatalog()->setCurrentVodName(currentVodName_);
 
     // 书源（Legado 阅读规则）：选中源变化时重建书籍模型；音频章节交给播放器
     connect(services_->legadoSourceModel(), &LegadoSourceModel::activeSourceChanged, this, [this]() {
@@ -303,7 +310,7 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
     wireEngineSignals();
     loadSettings();
     QTimer::singleShot(0, this, [this]() {
-        loadVideoList(1);
+        services_->videoCatalog()->loadVideoList(1);
     });
     Logger::instance().info("PlayerController initialized");
 }
@@ -364,24 +371,12 @@ MediaInfoModel *PlayerController::mediaInfoModel() { return &mediaInfoModel_; }
 PlaylistModel *PlayerController::playlistModel() { return &playlistModel_; }
 PlaylistModel *PlayerController::historyModel() { return &historyModel_; }
 RuntimeLogModel *PlayerController::runtimeLogModel() { return &runtimeLogModel_; }
-VideoSearchModel *PlayerController::sourceSearchModel() { return &sourceSearchModel_; }
 QString PlayerController::currentVodName() const { return currentVodName_; }
 bool PlayerController::sourceSwitchSuggested() const { return sourceSwitchSuggested_; }
 QString PlayerController::sourceSwitchReason() const { return sourceSwitchReason_; }
 QString PlayerController::sourceSwitchCandidate() const { return sourceSwitchCandidate_; }
-bool PlayerController::imageLoading() const { return imageLoading_; }
-QString PlayerController::currentImageUrl() const { return currentImageUrl_; }
-QString PlayerController::currentImageDisplayUrl() const { return currentImageDisplayUrl_; }
-QString PlayerController::imageMessage() const { return imageMessage_; }
-int PlayerController::imageDiskCacheCount() const { return imageCache_.count(); }
-qint64 PlayerController::imageDiskCacheBytes() const { return imageCache_.sizeBytes(); }
-bool PlayerController::memeLoading() const { return memeLoading_; }
-QVariantList PlayerController::memeImages() const { return memeImages_; }
-QString PlayerController::memeMessage() const { return memeMessage_; }
 QString PlayerController::currentShortVideoUrl() const { return currentShortVideoUrl_; }
 QString PlayerController::shortVideoMessage() const { return shortVideoMessage_; }
-QString PlayerController::currentVoiceUrl() const { return currentVoiceUrl_; }
-QString PlayerController::voiceMessage() const { return voiceMessage_; }
 bool PlayerController::musicLoading() const { return musicLoading_; }
 QVariantList PlayerController::musicResults() const { return musicResults_; }
 QString PlayerController::musicMessage() const { return musicMessage_; }
@@ -396,16 +391,7 @@ int PlayerController::musicLyricOffsetMs() const { return musicLyricOffsetMs_; }
 bool PlayerController::musicShowTranslation() const { return musicShowTranslation_; }
 bool PlayerController::musicShowRomanization() const { return musicShowRomanization_; }
 QString PlayerController::currentMusicLyricSource() const { return currentMusicLyricSource_; }
-bool PlayerController::hotNewsLoading() const { return hotNewsLoading_; }
-QVariantList PlayerController::hotNewsItems() const { return hotNewsItems_; }
-QString PlayerController::hotNewsMessage() const { return hotNewsMessage_; }
 QString PlayerController::appVersion() const { return QStringLiteral(MELOBOX_APP_VERSION); }
-bool PlayerController::updateChecking() const { return updateChecking_; }
-bool PlayerController::updateDownloading() const { return updateDownloading_; }
-bool PlayerController::updateAvailable() const { return updateAvailable_; }
-QString PlayerController::updateVersion() const { return updateVersion_; }
-QString PlayerController::updateMessage() const { return updateMessage_; }
-double PlayerController::updateDownloadProgress() const { return updateDownloadProgress_; }
 
 void PlayerController::openFile() {
     const QString path = QFileDialog::getOpenFileName(
@@ -568,7 +554,7 @@ void PlayerController::setCurrentVodName(const QString &name) {
     const QString trimmed = name.trimmed();
     if (currentVodName_ == trimmed) return;
     currentVodName_ = trimmed;
-    sourceSearchModel_.clear();
+    services_->videoCatalog()->sourceSearchModel()->clear();
     emit currentVodNameChanged();
 }
 
@@ -1169,49 +1155,6 @@ void PlayerController::wireEngineSignals() {
     });
 }
 
-VideoSearchModel *PlayerController::videoSearchModel() { return &videoSearchModel_; }
-VideoSearchModel *PlayerController::detailSearchModel() { return &detailSearchModel_; }
-
-void PlayerController::searchCurrentVodOnSite(int siteIndex) {
-    if (currentVodName_.trimmed().isEmpty()) {
-        Logger::instance().warn("No current VOD name for source search");
-        return;
-    }
-
-    const QString baseUrl = services_->apiSiteModel()->baseUrlAt(siteIndex);
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("Invalid API site index for source search: " + QString::number(siteIndex));
-        return;
-    }
-
-    Logger::instance().info("Source search: " + currentVodName_ + " on " + baseUrl);
-    sourceSearchModel_.search(baseUrl, currentVodName_, 1);
-}
-
-void PlayerController::downloadVideoEpisodes(const QString &vodName, const QString &poster, const QVariantList &episodes) {
-    services_->downloadModel()->enqueueVideo(vodName, poster, episodes);
-}
-
-void PlayerController::saveVideoM3u8Episodes(const QString &vodName, const QString &poster, const QVariantList &episodes) {
-    services_->downloadModel()->enqueueVideoM3u8Only(vodName, poster, episodes);
-}
-
-void PlayerController::downloadCurrentPlaylist() {
-    QVariantList episodes;
-    for (int i = 0; i < playlistModel_.count(); ++i) {
-        const QString url = playlistModel_.filePathAt(i);
-        if (url.trimmed().isEmpty()) continue;
-        QVariantMap episode;
-        episode[QStringLiteral("title")] = QStringLiteral("第 %1 集").arg(i + 1);
-        episode[QStringLiteral("url")] = url;
-        episodes.append(episode);
-    }
-
-    const QString name = currentVodName_.trimmed().isEmpty()
-        ? QStringLiteral("当前播放")
-        : currentVodName_;
-    services_->downloadModel()->enqueueVideo(name, QString(), episodes);
-}
 
 void PlayerController::saveCurrentPlaylistM3u8() {
     QVariantList episodes;
@@ -1230,59 +1173,26 @@ void PlayerController::saveCurrentPlaylistM3u8() {
     services_->downloadModel()->enqueueVideoM3u8Only(name, QString(), episodes);
 }
 
-void PlayerController::searchVideos(const QString &keyword, int page, bool forceRefresh) {
-    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("No API site configured");
-        return;
-    }
-    Logger::instance().info("Searching: " + keyword + " on " + baseUrl);
-    videoSearchModel_.search(baseUrl, keyword, page, forceRefresh);
-}
 
-void PlayerController::searchVideoById(const QString &vodId) {
-    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("No API site configured");
-        return;
-    }
-    Logger::instance().info("Searching by ID: " + vodId);
-    videoSearchModel_.searchById(baseUrl, vodId);
-}
 
-void PlayerController::loadVideoDetail(int vodId) {
-    if (vodId <= 0) {
-        Logger::instance().warn("Invalid VOD id for detail: " + QString::number(vodId));
-        return;
-    }
-    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("No API site configured");
-        return;
-    }
-    Logger::instance().info("Loading VOD detail: " + QString::number(vodId) + " on " + baseUrl);
-    detailSearchModel_.searchById(baseUrl, QString::number(vodId));
-}
 
-void PlayerController::loadVideoList(int page) {
-    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("No API site configured");
-        return;
-    }
-    Logger::instance().info("Loading video list page " + QString::number(page));
-    videoSearchModel_.loadList(baseUrl, page);
-}
 
-void PlayerController::loadVideoListByCategory(const QString &typeId, int page) {
-    QString baseUrl = services_->apiSiteModel()->currentVideoBaseUrl();
-    if (baseUrl.isEmpty()) {
-        Logger::instance().error("No API site configured");
-        return;
+
+void PlayerController::downloadCurrentPlaylist() {
+    QVariantList episodes;
+    for (int i = 0; i < playlistModel_.count(); ++i) {
+        const QString url = playlistModel_.filePathAt(i);
+        if (url.trimmed().isEmpty()) continue;
+        QVariantMap episode;
+        episode[QStringLiteral("title")] = QStringLiteral("第 %1 集").arg(i + 1);
+        episode[QStringLiteral("url")] = url;
+        episodes.append(episode);
     }
-    Logger::instance().info("Loading video list page " + QString::number(page)
-        + " category " + typeId);
-    videoSearchModel_.loadList(baseUrl, page, typeId);
+
+    const QString name = currentVodName_.trimmed().isEmpty()
+        ? QStringLiteral("当前播放")
+        : currentVodName_;
+    services_->downloadModel()->enqueueVideo(name, QString(), episodes);
 }
 
 void PlayerController::preparePlaybackTarget(const QString &displayUrl) {
@@ -1528,537 +1438,15 @@ void PlayerController::resolveAndPlayUrl(const QString &url) {
     });
 }
 
-void PlayerController::setImageState(bool loading, const QString &url, const QString &message, const QString &displayUrl) {
-    bool changed = false;
-    const QString resolvedDisplayUrl = displayUrl.isNull() ? currentImageDisplayUrl_ : displayUrl;
-    // setImageState 由 QML 频繁触发 (imageLoading/图片源切换), display 常是 data: base64
-    // 图片, 整行记进日志会令 miniplayer.log 膨胀到上百 MB。状态变更逻辑本身无需日志佐证,
-    // 去掉这条 info, 保留真实的重定向/下载错误日志 (见下方 redirect/error)。
-    if (imageLoading_ != loading) {
-        imageLoading_ = loading;
-        changed = true;
-    }
-    if (currentImageUrl_ != url) {
-        currentImageUrl_ = url;
-        changed = true;
-    }
-    if (currentImageDisplayUrl_ != resolvedDisplayUrl) {
-        currentImageDisplayUrl_ = resolvedDisplayUrl;
-        changed = true;
-    }
-    if (imageMessage_ != message) {
-        imageMessage_ = message;
-        changed = true;
-    }
-    if (changed)
-        emit imageStateChanged();
-}
 
-void PlayerController::showPrefetchedImage(const QString &imageUrl) {
-    const QString trimmed = imageUrl.trimmed();
-    if (trimmed.isEmpty()) return;
 
-    currentImageBytes_.clear();
-    currentImageContentType_.clear();
-    if (trimmed.startsWith(QStringLiteral("data:"), Qt::CaseInsensitive)) {
-        // 兼容旧预载池里的 data: 链接。
-        const int separator = trimmed.indexOf(QLatin1Char(','));
-        const int typeEnd = trimmed.indexOf(QLatin1Char(';'));
-        if (separator > 0) {
-            currentImageContentType_ = trimmed.mid(5, typeEnd > 5 ? typeEnd - 5 : separator - 5);
-            currentImageBytes_ = QByteArray::fromBase64(trimmed.mid(separator + 1).toLatin1());
-        }
-    } else {
-        loadImageBytesFromLocalUrl(trimmed);
-    }
-    setImageState(false, QStringLiteral("prefetched://image"), QStringLiteral("已从缓存池加载图片"), trimmed);
-}
 
-void PlayerController::prefetchImage(const QString &apiUrl) {
-    const QString trimmedApiUrl = apiUrl.trimmed();
-    if (trimmedApiUrl.isEmpty()) {
-        emit imagePrefetched(trimmedApiUrl, {});
-        return;
-    }
 
-    const CachedImageEntry cached = imageCache_.take(trimmedApiUrl);
-    if (!cached.bytes.isEmpty() && !cached.localPath.isEmpty()) {
-        emit imagePrefetched(trimmedApiUrl, localImageFileUrl(cached.localPath));
-        emit imageCacheChanged();
-        return;
-    }
 
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request{QUrl(trimmedApiUrl)};
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "application/json,image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    auto *reply = nam->get(request);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, trimmedApiUrl]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            nam->deleteLater();
-            emit imagePrefetched(trimmedApiUrl, {});
-            return;
-        }
 
-        const QByteArray bytes = reply->readAll();
-        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        const QString redirectedUrl = redirectedUrlFromReply(reply);
-        const QString imageUrl = redirectedUrl.isEmpty()
-            ? extractImageUrlFromResponse(bytes, reply->url(), contentType)
-            : redirectedUrl;
-        if (contentType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)) {
-            nam->deleteLater();
-            const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
-            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
-            const QString localPath = cacheImageBytes(trimmedApiUrl, reply->url().toString(), bytes, effectiveMime);
-            emit imageCacheChanged();
-            emit imagePrefetched(trimmedApiUrl,
-                localPath.isEmpty()
-                    ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
-                        QString::fromLatin1(bytes.toBase64()))
-                    : localImageFileUrl(localPath));
-            return;
-        }
-        if (imageUrl.trimmed().isEmpty()) {
-            nam->deleteLater();
-            emit imagePrefetched(trimmedApiUrl, {});
-            return;
-        }
 
-        QNetworkRequest imageRequest{QUrl(imageUrl)};
-        imageRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-        imageRequest.setRawHeader("Accept", "image/*,*/*");
-        imageRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        auto *imageReply = nam->get(imageRequest);
-        connect(imageReply, &QNetworkReply::finished, this,
-                [this, imageReply, nam, trimmedApiUrl]() {
-            imageReply->deleteLater();
-            nam->deleteLater();
-            if (imageReply->error() != QNetworkReply::NoError) {
-                emit imagePrefetched(trimmedApiUrl, {});
-                return;
-            }
-            const QByteArray imageBytes = imageReply->readAll();
-            if (imageBytes.isEmpty() || imageBytes.size() > 15 * 1024 * 1024) {
-                emit imagePrefetched(trimmedApiUrl, {});
-                return;
-            }
-            QString mime = imageReply->header(QNetworkRequest::ContentTypeHeader).toString()
-                .section(QLatin1Char(';'), 0, 0).trimmed();
-            if (mime.isEmpty()) mime = QStringLiteral("image/png");
-            const QString localPath = cacheImageBytes(trimmedApiUrl, imageReply->url().toString(), imageBytes, mime);
-            emit imageCacheChanged();
-            emit imagePrefetched(trimmedApiUrl,
-                localPath.isEmpty()
-                    ? QStringLiteral("data:%1;base64,%2").arg(mime,
-                        QString::fromLatin1(imageBytes.toBase64()))
-                    : localImageFileUrl(localPath));
-        });
-    });
-}
 
-void PlayerController::clearImageCache() {
-    imageCache_.clear();
-    imageMessage_ = QStringLiteral("图片磁盘缓存已清理");
-    emit imageCacheChanged();
-    emit imageStateChanged();
-}
-void PlayerController::loadRandomImage(const QString &requestedApiUrl) {
-    if (imageLoading_) {
-        Logger::instance().info(QStringLiteral("[ImageDebug] ignore duplicate loadRandomImage while loading"));
-        return;
-    }
-    lastImageLoadRequestMs_ = QDateTime::currentMSecsSinceEpoch();
-
-    const QString apiUrl = requestedApiUrl.trimmed().isEmpty()
-        ? services_->apiSiteModel()->imageBaseUrl().trimmed()
-        : requestedApiUrl.trimmed();
-    Logger::instance().info(QStringLiteral("[ImageDebug] loadRandomImage api=%1 currentSiteIndex=%2")
-        .arg(apiUrl)
-        .arg(services_->apiSiteModel()->currentIndex()));
-    if (apiUrl.isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("没有配置图片站点"));
-        return;
-    }
-
-    // 磁盘缓存有直接可用的图片时先展示，用户点击“换一张”不必等网络往返；
-    // 预载池会继续在后台补新图。
-    const CachedImageEntry cached = imageCache_.take(apiUrl);
-    if (!cached.bytes.isEmpty() && !cached.localPath.isEmpty()) {
-        currentImageBytes_ = cached.bytes;
-        currentImageContentType_ = cached.mimeType;
-        setImageState(false, cached.sourceUrl.isEmpty() ? currentImageUrl_ : cached.sourceUrl,
-            QStringLiteral("已从磁盘缓存加载图片"), localImageFileUrl(cached.localPath));
-        emit imageCacheChanged();
-        return;
-    }
-
-    setImageState(true, currentImageUrl_, QStringLiteral("正在获取图片..."), QStringLiteral(""));
-    currentImageBytes_.clear();
-    currentImageContentType_.clear();
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request{QUrl(apiUrl)};
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "application/json,image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam]() {
-        reply->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            nam->deleteLater();
-            setImageState(false, currentImageUrl_, QStringLiteral("图片请求失败：%1").arg(reply->errorString()));
-            return;
-        }
-
-        const QByteArray bytes = reply->readAll();
-        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        Logger::instance().info(QStringLiteral("[ImageDebug] api reply url=%1 status=%2 contentType=%3 bytes=%4")
-            .arg(reply->url().toString())
-            .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
-            .arg(contentType)
-            .arg(bytes.size()));
-        const QString redirectedImageUrl = redirectedUrlFromReply(reply);
-        const QString imageUrl = redirectedImageUrl.isEmpty()
-            ? extractImageUrlFromResponse(bytes, reply->url(), contentType)
-            : redirectedImageUrl;
-        Logger::instance().info(QStringLiteral("[ImageDebug] resolved imageUrl=%1 redirected=%2")
-            .arg(imageUrl, redirectedImageUrl));
-        if (imageUrl.trimmed().isEmpty()) {
-            nam->deleteLater();
-            setImageState(false, currentImageUrl_, QStringLiteral("没有从接口响应里解析到图片地址"));
-            return;
-        }
-
-        if (contentType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)) {
-            nam->deleteLater();
-            currentImageBytes_ = bytes;
-            currentImageContentType_ = contentType;
-            const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
-            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
-            const QString localPath = cacheImageBytes(services_->apiSiteModel()->imageBaseUrl().trimmed(), reply->url().toString(), bytes, effectiveMime);
-            emit imageCacheChanged();
-            const QString displayUrl = localPath.isEmpty()
-                ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
-                    QString::fromLatin1(bytes.toBase64()))
-                : localImageFileUrl(localPath);
-            setImageState(false, imageUrl, QStringLiteral("图片已加载"), displayUrl);
-            return;
-        }
-
-        QNetworkRequest imageRequest{QUrl(imageUrl)};
-        imageRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-        imageRequest.setRawHeader("Accept", "image/*,*/*");
-        imageRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-        auto *imageReply = nam->get(imageRequest);
-        connect(imageReply, &QNetworkReply::finished, this, [this, imageReply, nam, imageUrl]() {
-            imageReply->deleteLater();
-            nam->deleteLater();
-
-            if (imageReply->error() != QNetworkReply::NoError) {
-                Logger::instance().warn(QStringLiteral("[ImageDebug] image download error url=%1 error=%2")
-                    .arg(imageUrl, imageReply->errorString()));
-                setImageState(false, imageUrl, QStringLiteral("图片下载失败：%1").arg(imageReply->errorString()));
-                return;
-            }
-
-            const QByteArray imageBytes = imageReply->readAll();
-            const QString imageContentType = imageReply->header(QNetworkRequest::ContentTypeHeader).toString();
-            Logger::instance().info(QStringLiteral("[ImageDebug] image reply url=%1 status=%2 contentType=%3 bytes=%4")
-                .arg(imageReply->url().toString())
-                .arg(imageReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
-                .arg(imageContentType)
-                .arg(imageBytes.size()));
-            const QString imageReplyRedirectedUrl = redirectedUrlFromReply(imageReply);
-            const QString finalImageUrl = !imageReplyRedirectedUrl.isEmpty()
-                ? imageReplyRedirectedUrl
-                : (imageReply->url().isValid() && !imageReply->url().isEmpty()
-                    ? imageReply->url().toString()
-                    : imageUrl);
-            Logger::instance().info(QStringLiteral("[ImageDebug] finalImageUrl=%1 imageRedirect=%2")
-                .arg(finalImageUrl, imageReplyRedirectedUrl));
-            currentImageBytes_ = imageBytes;
-            currentImageContentType_ = imageContentType.isEmpty() ? QStringLiteral("image/png") : imageContentType;
-            const QString mime = currentImageContentType_.section(QLatin1Char(';'), 0, 0).trimmed();
-            const QString effectiveMime = mime.isEmpty() ? QStringLiteral("image/png") : mime;
-            const QString localPath = cacheImageBytes(services_->apiSiteModel()->imageBaseUrl().trimmed(), finalImageUrl, imageBytes, effectiveMime);
-            emit imageCacheChanged();
-            const QString displayUrl = localPath.isEmpty()
-                ? QStringLiteral("data:%1;base64,%2").arg(effectiveMime,
-                    QString::fromLatin1(imageBytes.toBase64()))
-                : localImageFileUrl(localPath);
-            setImageState(false, finalImageUrl, QStringLiteral("图片已加载"), displayUrl);
-        });
-    });
-}
-
-void PlayerController::saveCurrentImage() {
-    const QString imageUrl = currentImageUrl_.trimmed();
-    if (imageUrl.isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("请先加载一张图片"));
-        return;
-    }
-
-    const QUrl sourceUrl(imageUrl);
-    if (!sourceUrl.isValid() || sourceUrl.scheme().isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("当前图片地址无效"));
-        return;
-    }
-
-    if (!currentImageBytes_.isEmpty()) {
-        saveImageBytes(currentImageBytes_, sourceUrl, currentImageContentType_);
-        return;
-    }
-
-    setImageState(true, currentImageUrl_, QStringLiteral("正在下载图片..."));
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(sourceUrl);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, sourceUrl]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            setImageState(false, currentImageUrl_, QStringLiteral("图片下载失败：%1").arg(reply->errorString()));
-            return;
-        }
-
-        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        saveImageBytes(reply->readAll(), sourceUrl, contentType);
-    });
-}
-
-void PlayerController::copyCurrentImage() {
-    const QString imageUrl = currentImageUrl_.trimmed();
-    if (imageUrl.isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("请先加载一张图片"));
-        return;
-    }
-
-    const auto copyBytesToClipboard = [this](const QByteArray &bytes) {
-        const QImage image = imageFromBytes(bytes);
-        if (image.isNull()) {
-            imageMessage_ = QStringLiteral("图片解码失败，无法复制");
-            emit imageStateChanged();
-            return false;
-        }
-
-        if (auto *clipboard = QGuiApplication::clipboard()) {
-            clipboard->setImage(image);
-            imageMessage_ = QStringLiteral("已复制图片");
-        } else {
-            imageMessage_ = QStringLiteral("系统剪贴板不可用");
-        }
-        emit imageStateChanged();
-        return true;
-    };
-
-    if (!currentImageBytes_.isEmpty()) {
-        copyBytesToClipboard(currentImageBytes_);
-        return;
-    }
-
-    const QUrl sourceUrl(imageUrl);
-    if (!sourceUrl.isValid() || sourceUrl.scheme().isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("当前图片地址无效"));
-        return;
-    }
-
-    imageMessage_ = QStringLiteral("正在复制图片...");
-    emit imageStateChanged();
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(sourceUrl);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, copyBytesToClipboard]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            imageMessage_ = QStringLiteral("图片复制失败：%1").arg(reply->errorString());
-            emit imageStateChanged();
-            return;
-        }
-
-        const QByteArray bytes = reply->readAll();
-        currentImageBytes_ = bytes;
-        currentImageContentType_ = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        copyBytesToClipboard(bytes);
-    });
-}
-
-void PlayerController::searchMemes(const QString &keyword, int count) {
-    const QString trimmedKeyword = keyword.trimmed().isEmpty() ? QStringLiteral("龙图") : keyword.trimmed();
-    QUrl url(QStringLiteral("https://api.yujn.cn/api/bbq_ss.php"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("count"), QString::number(qBound(1, count, 30)));
-    query.addQueryItem(QStringLiteral("msg"), trimmedKeyword);
-    query.addQueryItem(QStringLiteral("_t"), QString::number(QDateTime::currentMSecsSinceEpoch()));
-    url.setQuery(query);
-
-    memeLoading_ = true;
-    memeMessage_ = QStringLiteral("正在搜索表情包...");
-    emit memeStateChanged();
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "application/json,image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, trimmedKeyword]() {
-        reply->deleteLater();
-        nam->deleteLater();
-        memeLoading_ = false;
-
-        if (reply->error() != QNetworkReply::NoError) {
-            memeMessage_ = QStringLiteral("表情包请求失败：%1").arg(reply->errorString());
-            emit memeStateChanged();
-            return;
-        }
-
-        const QStringList urls = extractImageUrlsFromResponse(reply->readAll(),
-                                                              reply->url(),
-                                                              reply->header(QNetworkRequest::ContentTypeHeader).toString());
-        memeImages_.clear();
-        for (const QString &url : urls) {
-            if (!url.trimmed().isEmpty() && !memeImages_.contains(url))
-                memeImages_.append(url);
-        }
-        memeMessage_ = memeImages_.isEmpty()
-            ? QStringLiteral("没有解析到“%1”的表情包").arg(trimmedKeyword)
-            : QStringLiteral("已加载 %1 张“%2”表情包").arg(memeImages_.size()).arg(trimmedKeyword);
-        emit memeStateChanged();
-    });
-}
-
-void PlayerController::loadDragonMeme() {
-    QUrl url(QStringLiteral("https://api.yujn.cn/api/long.php"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("type"), QStringLiteral("image"));
-    query.addQueryItem(QStringLiteral("_t"), QString::number(QDateTime::currentMSecsSinceEpoch()));
-    url.setQuery(query);
-
-    memeImages_.clear();
-    memeImages_.append(url.toString());
-    memeMessage_ = QStringLiteral("已加载随机龙图");
-    emit memeStateChanged();
-}
-
-void PlayerController::saveMemeImage(const QString &imageUrl) {
-    const QUrl sourceUrl(imageUrl.trimmed());
-    if (!sourceUrl.isValid() || sourceUrl.scheme().isEmpty()) {
-        memeMessage_ = QStringLiteral("表情包地址无效");
-        emit memeStateChanged();
-        return;
-    }
-
-    memeMessage_ = QStringLiteral("正在下载表情包...");
-    emit memeStateChanged();
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(sourceUrl);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, sourceUrl]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            memeMessage_ = QStringLiteral("表情包下载失败：%1").arg(reply->errorString());
-            emit memeStateChanged();
-            return;
-        }
-
-        const QByteArray bytes = reply->readAll();
-        if (bytes.isEmpty()) {
-            memeMessage_ = QStringLiteral("表情包内容为空，无法保存");
-            emit memeStateChanged();
-            return;
-        }
-
-        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        const QString folder = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("download/meme"));
-        QDir().mkpath(folder);
-        const QString fileName = QStringLiteral("meme-%1.%2")
-            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")),
-                 imageExtension(sourceUrl, contentType));
-        const QString path = QDir(folder).filePath(fileName);
-
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly)) {
-            memeMessage_ = QStringLiteral("保存失败：%1").arg(file.errorString());
-            emit memeStateChanged();
-            return;
-        }
-        file.write(bytes);
-        file.close();
-        memeMessage_ = QStringLiteral("已保存：%1").arg(path);
-        emit memeStateChanged();
-    });
-}
-
-void PlayerController::copyMemeUrl(const QString &imageUrl) {
-    const QUrl sourceUrl(imageUrl.trimmed());
-    if (!sourceUrl.isValid() || sourceUrl.scheme().isEmpty()) {
-        memeMessage_ = QStringLiteral("没有可复制的表情包地址");
-        emit memeStateChanged();
-        return;
-    }
-
-    memeMessage_ = QStringLiteral("正在复制表情包图片...");
-    emit memeStateChanged();
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(sourceUrl);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "image/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            memeMessage_ = QStringLiteral("表情包复制失败：%1").arg(reply->errorString());
-            emit memeStateChanged();
-            return;
-        }
-
-        const QImage image = imageFromBytes(reply->readAll());
-        if (image.isNull()) {
-            memeMessage_ = QStringLiteral("表情包解码失败，无法复制图片");
-            emit memeStateChanged();
-            return;
-        }
-
-        if (auto *clipboard = QGuiApplication::clipboard()) {
-            clipboard->setImage(image);
-            memeMessage_ = QStringLiteral("已复制表情包图片");
-        } else {
-            memeMessage_ = QStringLiteral("系统剪贴板不可用");
-        }
-        emit memeStateChanged();
-    });
-}
 
 void PlayerController::prefetchShortVideo(int sourceIndex, const QString &sourceUrl,
                                           const QString &label) {
@@ -2332,178 +1720,47 @@ void PlayerController::logShortVideoDebug(const QString &message) {
     Logger::instance().info(QStringLiteral("[ShortVideoDebug][QML] %1").arg(message));
 }
 
-QUrl PlayerController::voiceRequestUrl(int sourceIndex, QString *label) const {
-    const QString currentTime = QTime::currentTime().toString(QStringLiteral("HH:mm"));
-    const QStringList sources = {
-        QStringLiteral("http://api.yujn.cn/api/and.php?"),
-        QStringLiteral("http://api.yujn.cn/api/yujie.php?"),
-        QStringLiteral("https://api.yujn.cn/api/sjkunkun.php?"),
-        QStringLiteral("http://api.yujn.cn/api/lvcha.php?"),
-        QStringLiteral("http://api.yujn.cn/api/baoshi.php?msg=%1").arg(currentTime)
-    };
-    const QStringList labels = {
-        QStringLiteral("可爱的配音"),
-        QStringLiteral("随机播放一条御姐撒娇语音包"),
-        QStringLiteral("坤坤语音"),
-        QStringLiteral("绿茶"),
-        QStringLiteral("语音整点报时")
-    };
-    const int index = qBound(0, sourceIndex, sources.size() - 1);
-    if (label)
-        *label = labels[index];
-    QUrl url(sources[index]);
-    QUrlQuery query(url);
-    query.removeQueryItem(QStringLiteral("_t"));
-    query.addQueryItem(QStringLiteral("_t"), QString::number(QDateTime::currentMSecsSinceEpoch()));
-    url.setQuery(query);
-    return url;
-}
 
-void PlayerController::fetchVoiceFile(int sourceIndex, const QString &actionText, const std::function<void(const QString &, const QString &, const QString &)> &onReady) {
-    QString label;
-    const QUrl url = voiceRequestUrl(sourceIndex, &label);
-    const QString requestUrl = url.toString();
-    voiceMessage_ = QStringLiteral("正在%1%2").arg(actionText, label);
-    emit voiceChanged();
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "audio/*,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, url, requestUrl, label, onReady]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            voiceMessage_ = QStringLiteral("语音获取失败：%1").arg(reply->errorString());
-            emit voiceChanged();
-            return;
-        }
-
-        const QByteArray bytes = reply->readAll();
-        if (bytes.isEmpty()) {
-            voiceMessage_ = QStringLiteral("语音获取失败：内容为空");
-            emit voiceChanged();
-            return;
-        }
-
-        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        const QString folder = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("cache/voice-current"));
-        QDir().mkpath(folder);
-        const QString fileName = QStringLiteral("voice-current-%1.%2")
-            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")),
-                 audioExtension(url, contentType));
-        const QString path = QDir(folder).filePath(fileName);
-
-        QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-            voiceMessage_ = QStringLiteral("语音缓存失败：%1").arg(path);
-            emit voiceChanged();
-            return;
-        }
-
-        currentVoiceUrl_ = requestUrl;
-        currentVoiceFilePath_ = path;
-        onReady(path, requestUrl, label);
-    });
-}
 
 void PlayerController::playVoice(int sourceIndex) {
-    currentVoiceFilePath_.clear();
+    services_->voiceController()->playVoice(sourceIndex);
+}
 
+void PlayerController::preemptPlaybackForLocalAudio() {
     if (mpvMode_) {
         mpvBackend_.stop();
         mpvMode_ = false;
         updateMpvVideoWindowVisibility();
     }
     engine_.abortPipeline();
+}
 
+void PlayerController::playLocalAudioFile(const QString &path) {
     if (!qtPlayer_) {
-        Logger::instance().error("QtMediaPlayer is unavailable for voice playback");
+        Logger::instance().error("QtMediaPlayer is unavailable for local audio playback");
         return;
     }
 
-    fetchVoiceFile(sourceIndex, QStringLiteral("获取"), [this](const QString &path, const QString &, const QString &label) {
-        voiceMessage_ = QStringLiteral("正在播放%1").arg(label);
-        emit voiceChanged();
-
-        qtPlayer_->stop();
-        qtPlayer_->setSource(QUrl::fromLocalFile(path));
-        qtPlayer_->setPlaybackRate(playbackRate_);
-        qtNetworkMode_ = false;
-        userPausedPlayback_ = false;
-        currentFile_ = path;
-        positionMs_ = 0;
-        durationMs_ = 0;
-        isPlaying_ = true;
-        isPaused_ = false;
-        setLoading(false);
-        emit currentFileChanged();
-        emit timelineChanged();
-        emit playbackStateChanged();
-        qtPlayer_->play();
-    });
+    qtPlayer_->stop();
+    qtPlayer_->setSource(QUrl::fromLocalFile(path));
+    qtPlayer_->setPlaybackRate(playbackRate_);
+    qtNetworkMode_ = false;
+    userPausedPlayback_ = false;
+    currentFile_ = path;
+    positionMs_ = 0;
+    durationMs_ = 0;
+    isPlaying_ = true;
+    isPaused_ = false;
+    setLoading(false);
+    emit currentFileChanged();
+    emit timelineChanged();
+    emit playbackStateChanged();
+    qtPlayer_->play();
 }
 
-void PlayerController::saveVoice(int sourceIndex) {
-    fetchVoiceFile(sourceIndex, QStringLiteral("下载"), [this](const QString &, const QString &, const QString &) {
-        saveCurrentVoice();
-    });
-}
 
-void PlayerController::copyVoice(int sourceIndex) {
-    fetchVoiceFile(sourceIndex, QStringLiteral("复制"), [this](const QString &, const QString &, const QString &) {
-        copyCurrentVoice();
-    });
-}
 
-void PlayerController::saveCurrentVoice() {
-    if (currentVoiceFilePath_.trimmed().isEmpty() || !QFileInfo::exists(currentVoiceFilePath_)) {
-        voiceMessage_ = QStringLiteral("暂无可下载的语音，请先播放一条语音");
-        emit voiceChanged();
-        return;
-    }
 
-    const QString folder = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("download/voice"));
-    QDir().mkpath(folder);
-    const QString suffix = QFileInfo(currentVoiceFilePath_).suffix().isEmpty()
-        ? QStringLiteral("mp3")
-        : QFileInfo(currentVoiceFilePath_).suffix();
-    const QString path = QDir(folder).filePath(QStringLiteral("voice-%1.%2")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")), suffix));
-
-    if (!QFile::copy(currentVoiceFilePath_, path)) {
-        voiceMessage_ = QStringLiteral("语音保存失败：%1").arg(path);
-        emit voiceChanged();
-        return;
-    }
-
-    voiceMessage_ = QStringLiteral("语音已保存：%1").arg(path);
-    emit voiceChanged();
-}
-
-void PlayerController::copyCurrentVoice() {
-    if (currentVoiceFilePath_.trimmed().isEmpty() || !QFileInfo::exists(currentVoiceFilePath_)) {
-        voiceMessage_ = QStringLiteral("暂无可复制的语音，请先播放一条语音");
-        emit voiceChanged();
-        return;
-    }
-
-    QClipboard *clipboard = QGuiApplication::clipboard();
-    if (!clipboard) {
-        voiceMessage_ = QStringLiteral("复制失败：剪贴板不可用");
-        emit voiceChanged();
-        return;
-    }
-
-    auto *mimeData = new QMimeData();
-    mimeData->setUrls({QUrl::fromLocalFile(currentVoiceFilePath_)});
-    clipboard->setMimeData(mimeData);
-    voiceMessage_ = QStringLiteral("已复制当前语音文件：%1").arg(currentVoiceFilePath_);
-    emit voiceChanged();
-}
 
 void PlayerController::searchMusic(const QString &keyword, const QString &server) {
     const QString trimmedKeyword = keyword.trimmed();
@@ -2948,7 +2205,7 @@ void PlayerController::saveCurrentMusic() {
         QDir().mkpath(folder);
         const QString fileName = QStringLiteral("music-%1.%2")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")),
-                 audioExtension(url, contentType));
+                 MediaUtils::audioExtension(url, contentType));
         const QString path = QDir(folder).filePath(fileName);
 
         QSaveFile file(path);
@@ -3278,515 +2535,15 @@ void PlayerController::updateCurrentMusicLyricIndex() {
     emit musicLyricIndexChanged();
 }
 
-QString PlayerController::audioExtension(const QUrl &url, const QString &contentType) {
-    const QString type = contentType.toLower();
-    if (type.contains(QStringLiteral("mpeg")) || type.contains(QStringLiteral("mp3")))
-        return QStringLiteral("mp3");
-    if (type.contains(QStringLiteral("wav")))
-        return QStringLiteral("wav");
-    if (type.contains(QStringLiteral("ogg")))
-        return QStringLiteral("ogg");
-    if (type.contains(QStringLiteral("aac")))
-        return QStringLiteral("aac");
-    if (type.contains(QStringLiteral("flac")))
-        return QStringLiteral("flac");
-    if (type.contains(QStringLiteral("m4a")) || type.contains(QStringLiteral("mp4")))
-        return QStringLiteral("m4a");
 
-    const QString suffix = QFileInfo(url.path()).suffix().toLower();
-    if (!suffix.isEmpty() && suffix.length() <= 5)
-        return suffix;
-    return QStringLiteral("mp3");
-}
 
-void PlayerController::loadHotNews(const QString &type) {
-    static const QSet<QString> allowedTypes = {
-        QStringLiteral("baidu"),
-        QStringLiteral("tieba"),
-        QStringLiteral("zhihu"),
-        QStringLiteral("weibo"),
-        QStringLiteral("douyin"),
-        QStringLiteral("bilihot"),
-        QStringLiteral("sspai"),
-        QStringLiteral("biliall"),
-        QStringLiteral("history")
-    };
-    const QString trimmedType = type.trimmed();
-    const QString normalizedType = allowedTypes.contains(trimmedType) ? trimmedType : QStringLiteral("baidu");
 
-    QUrl url(QStringLiteral("http://api.yujn.cn/api/hotlist.php"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("type"), normalizedType);
-    query.addQueryItem(QStringLiteral("_t"), QString::number(QDateTime::currentMSecsSinceEpoch()));
-    url.setQuery(query);
 
-    hotNewsLoading_ = true;
-    hotNewsMessage_ = QStringLiteral("正在加载热讯...");
-    emit hotNewsChanged();
 
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    request.setRawHeader("Accept", "application/json,text/plain,*/*");
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
-    auto *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, normalizedType]() {
-        reply->deleteLater();
-        nam->deleteLater();
-        hotNewsLoading_ = false;
 
-        if (reply->error() != QNetworkReply::NoError) {
-            hotNewsMessage_ = QStringLiteral("热讯请求失败：%1").arg(reply->errorString());
-            emit hotNewsChanged();
-            return;
-        }
 
-        const QByteArray bytes = reply->readAll();
-        QJsonParseError parseError;
-        const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
-        QJsonArray rows;
-        if (parseError.error == QJsonParseError::NoError) {
-            if (doc.isArray()) {
-                rows = doc.array();
-            } else if (doc.isObject()) {
-                const QJsonObject root = doc.object();
-                const QStringList keys = {
-                    QStringLiteral("data"),
-                    QStringLiteral("list"),
-                    QStringLiteral("result"),
-                    QStringLiteral("news"),
-                    QStringLiteral("items")
-                };
-                for (const QString &key : keys) {
-                    const QJsonValue rootValue = root.value(key);
-                    if (rootValue.isArray()) {
-                        rows = rootValue.toArray();
-                        break;
-                    }
-                    if (rootValue.isObject()) {
-                        const QJsonObject nested = rootValue.toObject();
-                        for (const QString &nestedKey : keys) {
-                            if (nested.value(nestedKey).isArray()) {
-                                rows = nested.value(nestedKey).toArray();
-                                break;
-                            }
-                        }
-                    }
-                    if (!rows.isEmpty()) {
-                        break;
-                    }
-                }
-            }
-        }
 
-        hotNewsItems_.clear();
-        int rank = 1;
-        for (const QJsonValue &value : rows) {
-            if (!value.isObject()) {
-                continue;
-            }
-            const QJsonObject item = value.toObject();
-            const QString title = item.value(QStringLiteral("title")).toString(
-                item.value(QStringLiteral("name")).toString(
-                    item.value(QStringLiteral("word")).toString(
-                        item.value(QStringLiteral("query")).toString())));
-            if (title.trimmed().isEmpty()) {
-                continue;
-            }
 
-            QVariantMap map;
-            map[QStringLiteral("rank")] = rank++;
-            map[QStringLiteral("title")] = title.trimmed();
-            map[QStringLiteral("url")] = item.value(QStringLiteral("url")).toString(
-                item.value(QStringLiteral("link")).toString(
-                    item.value(QStringLiteral("mobileUrl")).toString(
-                        item.value(QStringLiteral("mobilUrl")).toString())));
-            map[QStringLiteral("hot")] = item.value(QStringLiteral("hot")).toString(
-                item.value(QStringLiteral("desc")).toString(
-                    item.value(QStringLiteral("score")).toString(
-                        item.value(QStringLiteral("num")).toString())));
-            hotNewsItems_.append(map);
-        }
 
-        hotNewsMessage_ = hotNewsItems_.isEmpty()
-            ? QStringLiteral("没有解析到热讯数据")
-            : QStringLiteral("已加载 %1 条 %2 热讯").arg(hotNewsItems_.size()).arg(normalizedType);
-        emit hotNewsChanged();
-    });
-}
 
-QString PlayerController::localImageFileUrl(const QString &path) {
-    if (path.trimmed().isEmpty()) return {};
-    return QUrl::fromLocalFile(QDir::cleanPath(path)).toString();
-}
-
-bool PlayerController::loadImageBytesFromLocalUrl(const QString &url) {
-    const QUrl qurl(url);
-    if (!qurl.isLocalFile()) return false;
-    QFile file(qurl.toLocalFile());
-    if (!file.open(QIODevice::ReadOnly)) return false;
-    const QByteArray bytes = file.readAll();
-    if (bytes.isEmpty()) return false;
-    currentImageBytes_ = bytes;
-    currentImageContentType_ = ImageCacheService::mimeFromExtension(QFileInfo(file).suffix());
-    return true;
-}
-
-QString PlayerController::cacheImageBytes(const QString &apiUrl, const QString &sourceUrl,
-                                          const QByteArray &bytes, const QString &mimeType) {
-    return imageCache_.put(apiUrl, sourceUrl, bytes, mimeType);
-}
-
-void PlayerController::saveImageBytes(const QByteArray &bytes, const QUrl &sourceUrl, const QString &contentType) {
-    if (bytes.isEmpty()) {
-        setImageState(false, currentImageUrl_, QStringLiteral("图片内容为空，无法保存"));
-        return;
-    }
-
-    const QString folder = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("download/image"));
-    QDir().mkpath(folder);
-    const QString fileName = QStringLiteral("image-%1.%2")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz")),
-             imageExtension(sourceUrl, contentType));
-    const QString path = QDir(folder).filePath(fileName);
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) {
-        setImageState(false, currentImageUrl_, QStringLiteral("保存失败：%1").arg(file.errorString()));
-        return;
-    }
-    file.write(bytes);
-    file.close();
-    currentImageBytes_ = bytes;
-    currentImageContentType_ = contentType;
-    setImageState(false, currentImageUrl_, QStringLiteral("已保存：%1").arg(path));
-}
-
-QString PlayerController::extractImageUrlFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType) {
-    if (contentType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive))
-        return responseUrl.toString();
-
-    const auto resolveUrl = [&responseUrl](const QString &raw) {
-        const QString trimmed = raw.trimmed();
-        if (trimmed.isEmpty())
-            return QString();
-        const QUrl parsed(trimmed);
-        if (parsed.isValid() && !parsed.isRelative())
-            return trimmed;
-        return responseUrl.resolved(parsed).toString();
-    };
-
-    const QJsonDocument doc = QJsonDocument::fromJson(bytes);
-    if (doc.isObject()) {
-        const QJsonObject root = doc.object();
-        const QStringList topKeys = {QStringLiteral("url"), QStringLiteral("link"), QStringLiteral("image"), QStringLiteral("img"), QStringLiteral("imgurl")};
-        for (const auto &key : topKeys) {
-            const QString value = root.value(key).toString();
-            if (!value.trimmed().isEmpty())
-                return resolveUrl(value);
-        }
-
-        const QJsonValue data = root.value(QStringLiteral("data"));
-        if (data.isString())
-            return resolveUrl(data.toString());
-        if (data.isObject()) {
-            const QJsonObject object = data.toObject();
-            for (const auto &key : topKeys) {
-                const QString value = object.value(key).toString();
-                if (!value.trimmed().isEmpty())
-                    return resolveUrl(value);
-            }
-            const QJsonObject urls = object.value(QStringLiteral("urls")).toObject();
-            const QString original = urls.value(QStringLiteral("original")).toString();
-            if (!original.trimmed().isEmpty())
-                return resolveUrl(original);
-        }
-        if (data.isArray() && !data.toArray().isEmpty()) {
-            const QJsonValue first = data.toArray().first();
-            if (first.isString())
-                return resolveUrl(first.toString());
-            if (first.isObject()) {
-                const QJsonObject object = first.toObject();
-                for (const auto &key : topKeys) {
-                    const QString value = object.value(key).toString();
-                    if (!value.trimmed().isEmpty())
-                        return resolveUrl(value);
-                }
-                const QString original = object.value(QStringLiteral("urls")).toObject().value(QStringLiteral("original")).toString();
-                if (!original.trimmed().isEmpty())
-                    return resolveUrl(original);
-            }
-        }
-    }
-
-    const QString text = QString::fromUtf8(bytes).trimmed();
-    static const QRegularExpression xmlUrl(QStringLiteral("<(?:url|link|image|img)>\\s*([^<]+)\\s*</(?:url|link|image|img)>"),
-                                           QRegularExpression::CaseInsensitiveOption);
-    const auto match = xmlUrl.match(text);
-    if (match.hasMatch())
-        return resolveUrl(match.captured(1));
-
-    if (text.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
-            || text.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive))
-        return resolveUrl(text);
-
-    return {};
-}
-
-QStringList PlayerController::extractImageUrlsFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType) {
-    QStringList urls;
-    const auto appendUrl = [&urls, &responseUrl](const QString &raw) {
-        const QString trimmed = raw.trimmed();
-        if (trimmed.isEmpty())
-            return;
-        QUrl parsed(trimmed);
-        const QString resolved = (parsed.isValid() && !parsed.isRelative())
-            ? trimmed
-            : responseUrl.resolved(parsed).toString();
-        if (!resolved.trimmed().isEmpty() && !urls.contains(resolved))
-            urls.append(resolved);
-    };
-
-    if (contentType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)) {
-        appendUrl(responseUrl.toString());
-        return urls;
-    }
-
-    const std::function<void(const QJsonValue &)> collectJson = [&](const QJsonValue &value) {
-        if (value.isString()) {
-            const QString text = value.toString();
-            if (text.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
-                    || text.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)
-                    || text.contains(QRegularExpression(QStringLiteral("\\.(?:jpg|jpeg|png|gif|webp)(?:$|[?#])"),
-                                                        QRegularExpression::CaseInsensitiveOption))) {
-                appendUrl(text);
-            }
-            return;
-        }
-        if (value.isArray()) {
-            for (const QJsonValue &item : value.toArray())
-                collectJson(item);
-            return;
-        }
-        if (value.isObject()) {
-            const QJsonObject object = value.toObject();
-            for (const QString &key : object.keys())
-                collectJson(object.value(key));
-        }
-    };
-
-    const QJsonDocument doc = QJsonDocument::fromJson(bytes);
-    if (!doc.isNull()) {
-        collectJson(doc.isArray() ? QJsonValue(doc.array()) : QJsonValue(doc.object()));
-        if (!urls.isEmpty())
-            return urls;
-    }
-
-    const QString text = QString::fromUtf8(bytes);
-    static const QRegularExpression imageUrlRe(
-        QStringLiteral("https?://[^\\s\"'<>]+\\.(?:jpg|jpeg|png|gif|webp)(?:[^\\s\"'<>]*)?"),
-        QRegularExpression::CaseInsensitiveOption);
-    auto match = imageUrlRe.globalMatch(text);
-    while (match.hasNext())
-        appendUrl(match.next().captured(0));
-
-    if (urls.isEmpty()) {
-        const QString trimmed = text.trimmed();
-        if (trimmed.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
-                || trimmed.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)) {
-            appendUrl(trimmed);
-        }
-    }
-
-    return urls;
-}
-
-QString PlayerController::imageExtension(const QUrl &url, const QString &contentType) {
-    const QString type = contentType.toLower();
-    if (type.contains(QStringLiteral("webp"))) return QStringLiteral("webp");
-    if (type.contains(QStringLiteral("png"))) return QStringLiteral("png");
-    if (type.contains(QStringLiteral("gif"))) return QStringLiteral("gif");
-    if (type.contains(QStringLiteral("bmp"))) return QStringLiteral("bmp");
-    if (type.contains(QStringLiteral("jpeg")) || type.contains(QStringLiteral("jpg"))) return QStringLiteral("jpg");
-
-    const QString suffix = QFileInfo(url.path()).suffix().toLower();
-    if (!suffix.isEmpty() && suffix.size() <= 5)
-        return suffix;
-    return QStringLiteral("jpg");
-}
-
-void PlayerController::setUpdateState(bool checking, bool downloading, bool available, const QString &message) {
-    bool changed = false;
-    if (updateChecking_ != checking) {
-        updateChecking_ = checking;
-        changed = true;
-    }
-    if (updateDownloading_ != downloading) {
-        updateDownloading_ = downloading;
-        changed = true;
-    }
-    if (updateAvailable_ != available) {
-        updateAvailable_ = available;
-        changed = true;
-    }
-    if (updateMessage_ != message) {
-        updateMessage_ = message;
-        changed = true;
-    }
-    if (changed)
-        emit updateStateChanged();
-}
-
-int PlayerController::compareVersions(const QString &left, const QString &right) {
-    const QStringList leftParts = normalizeVersion(left).split(QLatin1Char('.'), Qt::SkipEmptyParts);
-    const QStringList rightParts = normalizeVersion(right).split(QLatin1Char('.'), Qt::SkipEmptyParts);
-    const int count = qMax(leftParts.size(), rightParts.size());
-    for (int i = 0; i < count; ++i) {
-        const int leftValue = i < leftParts.size() ? leftParts.at(i).toInt() : 0;
-        const int rightValue = i < rightParts.size() ? rightParts.at(i).toInt() : 0;
-        if (leftValue < rightValue) return -1;
-        if (leftValue > rightValue) return 1;
-    }
-    return 0;
-}
-
-void PlayerController::checkForUpdates() {
-    if (updateChecking_ || updateDownloading_)
-        return;
-
-    const QString owner = updaterOwner();
-    const QString repo = updaterRepo();
-    if (owner.isEmpty() || repo.isEmpty()) {
-        setUpdateState(false, false, false, QStringLiteral("未配置 GitHub 更新源"));
-        return;
-    }
-
-    updateAssetUrl_.clear();
-    updateAssetName_.clear();
-    updateVersion_.clear();
-    updateDownloadProgress_ = 0.0;
-    emit updateStateChanged();
-    setUpdateState(true, false, false, QStringLiteral("正在检查更新..."));
-
-    const QUrl url(QStringLiteral("https://api.github.com/repos/%1/%2/releases/latest").arg(owner, repo));
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", QByteArrayLiteral("MeloBox-Updater/1.0"));
-    request.setRawHeader("Accept", QByteArrayLiteral("application/vnd.github+json"));
-
-    QNetworkReply *reply = nam->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            setUpdateState(false, false, false, QStringLiteral("检查更新失败：%1").arg(reply->errorString()));
-            return;
-        }
-
-        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-        if (!doc.isObject()) {
-            setUpdateState(false, false, false, QStringLiteral("更新响应格式无效"));
-            return;
-        }
-
-        const QJsonObject root = doc.object();
-        const QString latestVersion = normalizeVersion(root.value(QStringLiteral("tag_name")).toString(
-            root.value(QStringLiteral("name")).toString()));
-        if (latestVersion.isEmpty()) {
-            setUpdateState(false, false, false, QStringLiteral("没有读取到最新版本号"));
-            return;
-        }
-
-        QString assetUrl;
-        QString assetName;
-        const QJsonArray assets = root.value(QStringLiteral("assets")).toArray();
-        for (const QJsonValue &value : assets) {
-            const QJsonObject asset = value.toObject();
-            const QString name = asset.value(QStringLiteral("name")).toString();
-            if (!name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive))
-                continue;
-            if (!name.contains(QStringLiteral("MeloBox"), Qt::CaseInsensitive))
-                continue;
-            assetName = name;
-            assetUrl = asset.value(QStringLiteral("browser_download_url")).toString();
-            break;
-        }
-
-        if (compareVersions(appVersion(), latestVersion) >= 0) {
-            updateVersion_ = latestVersion;
-            setUpdateState(false, false, false, QStringLiteral("当前已是最新版本：%1").arg(appVersion()));
-            return;
-        }
-
-        if (assetUrl.isEmpty()) {
-            updateVersion_ = latestVersion;
-            setUpdateState(false, false, false, QStringLiteral("发现新版本 %1，但没有找到安装包").arg(latestVersion));
-            return;
-        }
-
-        updateVersion_ = latestVersion;
-        updateAssetUrl_ = assetUrl;
-        updateAssetName_ = assetName.isEmpty()
-            ? QStringLiteral("MeloBox-Setup-%1.exe").arg(latestVersion)
-            : assetName;
-        setUpdateState(false, false, true, QStringLiteral("发现新版本：%1").arg(latestVersion));
-    });
-}
-
-void PlayerController::downloadAndInstallUpdate() {
-    if (!updateAvailable_ || updateAssetUrl_.isEmpty() || updateDownloading_)
-        return;
-
-    updateDownloadProgress_ = 0.0;
-    emit updateStateChanged();
-    setUpdateState(false, true, true, QStringLiteral("正在下载更新..."));
-
-    QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    if (folder.isEmpty())
-        folder = QCoreApplication::applicationDirPath();
-    folder = QDir(folder).filePath(QStringLiteral("MeloBox-update"));
-    QDir().mkpath(folder);
-
-    const QString fileName = updateAssetName_.isEmpty() ? QStringLiteral("MeloBox-Setup.exe") : updateAssetName_;
-    const QString installerPath = QDir(folder).filePath(fileName);
-
-    auto *nam = new QNetworkAccessManager(this);
-    QNetworkRequest request{QUrl(updateAssetUrl_)};
-    request.setRawHeader("User-Agent", QByteArrayLiteral("MeloBox-Updater/1.0"));
-    QNetworkReply *reply = nam->get(request);
-
-    connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
-        if (total > 0) {
-            updateDownloadProgress_ = qBound(0.0, static_cast<double>(received) / static_cast<double>(total), 1.0);
-            emit updateStateChanged();
-        }
-    });
-
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, installerPath]() {
-        reply->deleteLater();
-        nam->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            setUpdateState(false, false, updateAvailable_, QStringLiteral("下载更新失败：%1").arg(reply->errorString()));
-            return;
-        }
-
-        QFile file(installerPath);
-        if (!file.open(QIODevice::WriteOnly)) {
-            setUpdateState(false, false, updateAvailable_, QStringLiteral("保存更新失败：%1").arg(file.errorString()));
-            return;
-        }
-        file.write(reply->readAll());
-        file.close();
-
-        updateDownloadProgress_ = 1.0;
-        emit updateStateChanged();
-        setUpdateState(false, false, true, QStringLiteral("更新已下载，正在启动安装包..."));
-        stop();
-        if (!QProcess::startDetached(installerPath, QStringList{})) {
-            setUpdateState(false, false, true, QStringLiteral("安装包启动失败：%1").arg(installerPath));
-        }
-    });
-}

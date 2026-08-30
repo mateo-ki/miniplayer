@@ -67,7 +67,7 @@ Item {
                             border.color: memeSearchInput.activeFocus ? root.theme.accentColor : root.theme.borderColor
                             border.width: 1
                         }
-                        onAccepted: root.controller.searchMemes(text, 10)
+                        onAccepted: services.memeController.searchMemes(text, 10)
                     }
 
                     Rectangle {
@@ -75,15 +75,15 @@ Item {
                         Layout.preferredHeight: 34
                         radius: root.theme.controlRadius
                         color: memeSearchHover.hovered ? root.theme.accentMutedColor : root.theme.accentColor
-                        opacity: root.controller.memeLoading ? 0.55 : 1.0
+                        opacity: services.memeController.memeLoading ? 0.55 : 1.0
 
                         HoverHandler { id: memeSearchHover }
 
                         MouseArea {
                             anchors.fill: parent
-                            enabled: !root.controller.memeLoading
+                            enabled: !services.memeController.memeLoading
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.controller.searchMemes(memeSearchInput.text, 10)
+                            onClicked: services.memeController.searchMemes(memeSearchInput.text, 10)
                         }
 
                         Text {
@@ -109,7 +109,7 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.controller.loadDragonMeme()
+                            onClicked: services.memeController.loadDragonMeme()
                         }
 
                         Text {
@@ -139,7 +139,7 @@ Item {
                         clip: true
                         cellWidth: Math.max(180, width / Math.max(1, Math.floor(width / 220)))
                         cellHeight: 210
-                        model: root.controller.memeImages
+                        model: services.memeController.memeImages
 
                         delegate: Rectangle {
                             width: memeGrid.cellWidth - 10
@@ -197,7 +197,7 @@ Item {
                                     MouseArea {
                                         anchors.fill: parent
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.controller.copyMemeUrl(modelData)
+                                        onClicked: services.memeController.copyMemeUrl(modelData)
                                     }
                                     Text {
                                         anchors.centerIn: parent
@@ -221,7 +221,7 @@ Item {
                                     MouseArea {
                                         anchors.fill: parent
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.controller.saveMemeImage(modelData)
+                                        onClicked: services.memeController.saveMemeImage(modelData)
                                     }
                                     Text {
                                         anchors.centerIn: parent
@@ -238,14 +238,14 @@ Item {
 
                     BusyIndicator {
                         anchors.centerIn: parent
-                        running: root.controller.memeLoading
+                        running: services.memeController.memeLoading
                         visible: running
                     }
 
                     Text {
                         anchors.centerIn: parent
                         width: parent.width * 0.72
-                        visible: root.controller.memeImages.length === 0 && !root.controller.memeLoading
+                        visible: services.memeController.memeImages.length === 0 && !services.memeController.memeLoading
                         text: root.strings.memeHint
                         color: root.theme.textMutedColor
                         font.family: root.theme.fontFamily
@@ -257,9 +257,9 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    visible: root.controller.memeMessage.length > 0
-                    text: root.controller.memeMessage
-                    color: root.controller.memeMessage.indexOf("失败") >= 0 || root.controller.memeMessage.indexOf("没有") >= 0
+                    visible: services.memeController.memeMessage.length > 0
+                    text: services.memeController.memeMessage
+                    color: services.memeController.memeMessage.indexOf("失败") >= 0 || services.memeController.memeMessage.indexOf("没有") >= 0
                         ? root.theme.dangerColor
                         : root.theme.accentColor
                     font.family: root.theme.fontFamily
@@ -271,8 +271,8 @@ Item {
     }
 
     Component.onCompleted: {
-        if (root.controller.memeImages.length === 0) {
-            root.controller.searchMemes(root.strings.memeDragonLabel, 10)
+        if (services.memeController.memeImages.length === 0) {
+            services.memeController.searchMemes(root.strings.memeDragonLabel, 10)
         }
     }
 
@@ -323,7 +323,7 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.controller.copyMemeUrl(memePreviewDialog.imageUrl)
+                        onClicked: services.memeController.copyMemeUrl(memePreviewDialog.imageUrl)
                     }
                     Text {
                         anchors.centerIn: parent
@@ -344,7 +344,7 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.controller.saveMemeImage(memePreviewDialog.imageUrl)
+                        onClicked: services.memeController.saveMemeImage(memePreviewDialog.imageUrl)
                     }
                     Text {
                         anchors.centerIn: parent

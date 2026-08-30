@@ -13,9 +13,7 @@
 #include "models/MediaInfoModel.h"
 #include "models/PlaylistModel.h"
 #include "models/RuntimeLogModel.h"
-#include "models/VideoSearchModel.h"
 #include "mpv/MpvBackend.h"
-#include "media/ImageCacheService.h"
 
 class VideoFrameBridge;
 class HlsPlaylistProxy;
@@ -63,23 +61,9 @@ public:
     Q_PROPERTY(PlaylistModel *playlistModel READ playlistModel CONSTANT)
     Q_PROPERTY(PlaylistModel *historyModel READ historyModel CONSTANT)
     Q_PROPERTY(RuntimeLogModel *runtimeLogModel READ runtimeLogModel CONSTANT)
-    Q_PROPERTY(VideoSearchModel *videoSearchModel READ videoSearchModel CONSTANT)
-    Q_PROPERTY(VideoSearchModel *detailSearchModel READ detailSearchModel CONSTANT)
-    Q_PROPERTY(VideoSearchModel *sourceSearchModel READ sourceSearchModel CONSTANT)
     Q_PROPERTY(QString currentVodName READ currentVodName NOTIFY currentVodNameChanged)
-    Q_PROPERTY(bool imageLoading READ imageLoading NOTIFY imageStateChanged)
-    Q_PROPERTY(QString currentImageUrl READ currentImageUrl NOTIFY imageStateChanged)
-    Q_PROPERTY(QString currentImageDisplayUrl READ currentImageDisplayUrl NOTIFY imageStateChanged)
-    Q_PROPERTY(QString imageMessage READ imageMessage NOTIFY imageStateChanged)
-    Q_PROPERTY(int imageDiskCacheCount READ imageDiskCacheCount NOTIFY imageCacheChanged)
-    Q_PROPERTY(qint64 imageDiskCacheBytes READ imageDiskCacheBytes NOTIFY imageCacheChanged)
-    Q_PROPERTY(bool memeLoading READ memeLoading NOTIFY memeStateChanged)
-    Q_PROPERTY(QVariantList memeImages READ memeImages NOTIFY memeStateChanged)
-    Q_PROPERTY(QString memeMessage READ memeMessage NOTIFY memeStateChanged)
     Q_PROPERTY(QString currentShortVideoUrl READ currentShortVideoUrl NOTIFY shortVideoChanged)
     Q_PROPERTY(QString shortVideoMessage READ shortVideoMessage NOTIFY shortVideoChanged)
-    Q_PROPERTY(QString currentVoiceUrl READ currentVoiceUrl NOTIFY voiceChanged)
-    Q_PROPERTY(QString voiceMessage READ voiceMessage NOTIFY voiceChanged)
     Q_PROPERTY(bool musicLoading READ musicLoading NOTIFY musicChanged)
     Q_PROPERTY(QVariantList musicResults READ musicResults NOTIFY musicChanged)
     Q_PROPERTY(QString musicMessage READ musicMessage NOTIFY musicChanged)
@@ -94,16 +78,7 @@ public:
     Q_PROPERTY(bool musicShowTranslation READ musicShowTranslation NOTIFY musicChanged)
     Q_PROPERTY(bool musicShowRomanization READ musicShowRomanization NOTIFY musicChanged)
     Q_PROPERTY(QString currentMusicLyricSource READ currentMusicLyricSource NOTIFY musicChanged)
-    Q_PROPERTY(bool hotNewsLoading READ hotNewsLoading NOTIFY hotNewsChanged)
-    Q_PROPERTY(QVariantList hotNewsItems READ hotNewsItems NOTIFY hotNewsChanged)
-    Q_PROPERTY(QString hotNewsMessage READ hotNewsMessage NOTIFY hotNewsChanged)
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
-    Q_PROPERTY(bool updateChecking READ updateChecking NOTIFY updateStateChanged)
-    Q_PROPERTY(bool updateDownloading READ updateDownloading NOTIFY updateStateChanged)
-    Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY updateStateChanged)
-    Q_PROPERTY(QString updateVersion READ updateVersion NOTIFY updateStateChanged)
-    Q_PROPERTY(QString updateMessage READ updateMessage NOTIFY updateStateChanged)
-    Q_PROPERTY(double updateDownloadProgress READ updateDownloadProgress NOTIFY updateStateChanged)
     Q_PROPERTY(bool sourceSwitchSuggested READ sourceSwitchSuggested NOTIFY sourceSwitchSuggestionChanged)
     Q_PROPERTY(QString sourceSwitchReason READ sourceSwitchReason NOTIFY sourceSwitchSuggestionChanged)
     Q_PROPERTY(QString sourceSwitchCandidate READ sourceSwitchCandidate NOTIFY sourceSwitchSuggestionChanged)
@@ -142,23 +117,9 @@ public:
     PlaylistModel *playlistModel();
     PlaylistModel *historyModel();
     RuntimeLogModel *runtimeLogModel();
-    VideoSearchModel *videoSearchModel();
-    VideoSearchModel *detailSearchModel();
-    VideoSearchModel *sourceSearchModel();
     QString currentVodName() const;
-    bool imageLoading() const;
-    QString currentImageUrl() const;
-    QString currentImageDisplayUrl() const;
-    QString imageMessage() const;
-    int imageDiskCacheCount() const;
-    qint64 imageDiskCacheBytes() const;
-    bool memeLoading() const;
-    QVariantList memeImages() const;
-    QString memeMessage() const;
     QString currentShortVideoUrl() const;
     QString shortVideoMessage() const;
-    QString currentVoiceUrl() const;
-    QString voiceMessage() const;
     bool musicLoading() const;
     QVariantList musicResults() const;
     QString musicMessage() const;
@@ -173,54 +134,26 @@ public:
     bool musicShowTranslation() const;
     bool musicShowRomanization() const;
     QString currentMusicLyricSource() const;
-    bool hotNewsLoading() const;
-    QVariantList hotNewsItems() const;
-    QString hotNewsMessage() const;
     QString appVersion() const;
-    bool updateChecking() const;
-    bool updateDownloading() const;
-    bool updateAvailable() const;
-    QString updateVersion() const;
-    QString updateMessage() const;
-    double updateDownloadProgress() const;
     bool sourceSwitchSuggested() const;
     QString sourceSwitchReason() const;
     QString sourceSwitchCandidate() const;
 
-    Q_INVOKABLE void searchVideos(const QString &keyword, int page = 1, bool forceRefresh = false);
-    Q_INVOKABLE void searchVideoById(const QString &vodId);
-    Q_INVOKABLE void loadVideoDetail(int vodId);
-    Q_INVOKABLE void loadVideoList(int page = 1);
-    Q_INVOKABLE void loadVideoListByCategory(const QString &typeId, int page = 1);
     Q_INVOKABLE void setCurrentVodName(const QString &name);
-    Q_INVOKABLE void searchCurrentVodOnSite(int siteIndex);
-    Q_INVOKABLE void downloadVideoEpisodes(const QString &vodName, const QString &poster, const QVariantList &episodes);
-    Q_INVOKABLE void saveVideoM3u8Episodes(const QString &vodName, const QString &poster, const QVariantList &episodes);
     Q_INVOKABLE void downloadCurrentPlaylist();
     Q_INVOKABLE void saveCurrentPlaylistM3u8();
     Q_INVOKABLE void playVideoUrl(const QString &url);
     Q_INVOKABLE void playVodUrl(const QString &url);
     Q_INVOKABLE void resolveAndPlayUrl(const QString &url);
-    Q_INVOKABLE void loadRandomImage(const QString &apiUrl = QString());
-    Q_INVOKABLE void showPrefetchedImage(const QString &imageUrl);
-    Q_INVOKABLE void prefetchImage(const QString &apiUrl);
-    Q_INVOKABLE void clearImageCache();
-    Q_INVOKABLE void saveCurrentImage();
-    Q_INVOKABLE void copyCurrentImage();
-    Q_INVOKABLE void searchMemes(const QString &keyword = QStringLiteral("龙图"), int count = 10);
-    Q_INVOKABLE void loadDragonMeme();
-    Q_INVOKABLE void saveMemeImage(const QString &imageUrl);
-    Q_INVOKABLE void copyMemeUrl(const QString &imageUrl);
     Q_INVOKABLE void playShortVideo(int sourceIndex = 0);
     Q_INVOKABLE void prefetchShortVideo(int sourceIndex, const QString &sourceUrl, const QString &label);
     Q_INVOKABLE void playShortVideoUrl(const QString &url, const QString &label = QString());
     Q_INVOKABLE void stopShortVideo();
     Q_INVOKABLE void logShortVideoDebug(const QString &message);
     Q_INVOKABLE void playVoice(int sourceIndex = 0);
-    Q_INVOKABLE void saveVoice(int sourceIndex = 0);
-    Q_INVOKABLE void copyVoice(int sourceIndex = 0);
-    Q_INVOKABLE void saveCurrentVoice();
-    Q_INVOKABLE void copyCurrentVoice();
+    // 语音模块取数完成后由播放器播放本地文件（AppServices 信号接线）
+    void playLocalAudioFile(const QString &path);
+    void preemptPlaybackForLocalAudio();
     Q_INVOKABLE void searchMusic(const QString &keyword, const QString &server = QString());
     Q_INVOKABLE void loadMusicPlaylist(const QString &playlistId, const QString &server = QStringLiteral("netease"));
     Q_INVOKABLE void resolveAndPlayMusic(const QString &source, const QString &id, const QString &title,
@@ -232,9 +165,6 @@ public:
     Q_INVOKABLE void resetMusicLyricOffset();
     Q_INVOKABLE void setMusicLyricDisplayOptions(bool showTranslation, bool showRomanization);
     Q_INVOKABLE void reloadCurrentMusicLyrics();
-    Q_INVOKABLE void loadHotNews(const QString &type = QStringLiteral("baidu"));
-    Q_INVOKABLE void checkForUpdates();
-    Q_INVOKABLE void downloadAndInstallUpdate();
     Q_INVOKABLE QVariant uiSetting(const QString &key, const QVariant &defaultValue = QVariant()) const;
     Q_INVOKABLE void saveUiSetting(const QString &key, const QVariant &value);
 
@@ -291,17 +221,10 @@ signals:
     void playlistEpisodeRequested(int index, const QString &title);
     void playbackEnded();
     void playbackFailed(const QString &message);
-    void imageStateChanged();
-    void imageCacheChanged();
-    void memeStateChanged();
     void shortVideoChanged();
-    void imagePrefetched(const QString &apiUrl, const QString &imageUrl);
     void shortVideoPrefetched(int sourceIndex, const QString &videoUrl, const QString &label);
-    void voiceChanged();
     void musicChanged();
     void musicLyricIndexChanged();
-    void hotNewsChanged();
-    void updateStateChanged();
     void sourceSwitchSuggestionChanged();
 
 private:
@@ -311,10 +234,6 @@ private:
     PlaylistModel playlistModel_;
     PlaylistModel historyModel_;
     RuntimeLogModel runtimeLogModel_;
-    VideoSearchModel videoSearchModel_;
-    VideoSearchModel detailSearchModel_;
-    VideoSearchModel sourceSearchModel_;
-    ImageCacheService imageCache_;
     MpvBackend mpvBackend_;
     QMediaPlayer *qtPlayer_ = nullptr;
     QAudioOutput *qtAudioOutput_ = nullptr;
@@ -355,16 +274,6 @@ private:
     QHash<int, qint64> sourceSuggestionCooldowns_;
     qint64 pendingSourceSeekMs_ = -1;
     bool pendingSourcePaused_ = false;
-    bool imageLoading_ = false;
-    QString currentImageUrl_;
-    QString currentImageDisplayUrl_;
-    QString imageMessage_;
-    QByteArray currentImageBytes_;
-    QString currentImageContentType_;
-    qint64 lastImageLoadRequestMs_ = 0;
-    bool memeLoading_ = false;
-    QVariantList memeImages_;
-    QString memeMessage_;
     QString currentShortVideoUrl_;
     QString shortVideoMessage_;
     QString suspendedVideoUrl_;
@@ -372,9 +281,6 @@ private:
     bool suspendedVideoWasPlaying_ = false;
     bool suspendedVideoWasPaused_ = false;
     bool suspendedVideoRestorePending_ = false;
-    QString currentVoiceUrl_;
-    QString currentVoiceFilePath_;
-    QString voiceMessage_;
     bool musicLoading_ = false;
     QVariantList musicResults_;
     QString musicMessage_;
@@ -396,17 +302,6 @@ private:
     QString currentMusicLyricRomanization_;
     quint64 musicSearchSerial_ = 0;
     quint64 musicLyricRequestSerial_ = 0;
-    bool hotNewsLoading_ = false;
-    QVariantList hotNewsItems_;
-    QString hotNewsMessage_;
-    bool updateChecking_ = false;
-    bool updateDownloading_ = false;
-    bool updateAvailable_ = false;
-    QString updateVersion_;
-    QString updateMessage_;
-    QString updateAssetUrl_;
-    QString updateAssetName_;
-    double updateDownloadProgress_ = 0.0;
 
     bool opening_ = false;
     bool loading_ = false;
@@ -430,25 +325,11 @@ private:
     void loadSettings();
     void saveSettings();
     void recordPlaybackHistory(const QString &filePath, const QString &title);
-    void setImageState(bool loading, const QString &url, const QString &message, const QString &displayUrl = QString());
-    static QString localImageFileUrl(const QString &path);
-    bool loadImageBytesFromLocalUrl(const QString &url);
-    QString cacheImageBytes(const QString &apiUrl, const QString &sourceUrl,
-                            const QByteArray &bytes, const QString &mimeType);
-    void saveImageBytes(const QByteArray &bytes, const QUrl &sourceUrl, const QString &contentType);
-    static QString extractImageUrlFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType);
-    static QStringList extractImageUrlsFromResponse(const QByteArray &bytes, const QUrl &responseUrl, const QString &contentType);
-    static QString imageExtension(const QUrl &url, const QString &contentType);
     void setCurrentMusicLrc(const QString &lrc);
     void updateCurrentMusicLyricIndex();
     void loadMusicLyricsForCurrentTrack(bool forceRefresh = false);
     bool loadLocalMusicLyrics();
     static QVariantList parseMusicLyricTrack(const QString &text, const QString &fieldName);
-    QUrl voiceRequestUrl(int sourceIndex, QString *label = nullptr) const;
-    void fetchVoiceFile(int sourceIndex, const QString &actionText, const std::function<void(const QString &, const QString &, const QString &)> &onReady);
-    static QString audioExtension(const QUrl &url, const QString &contentType);
-    void setUpdateState(bool checking, bool downloading, bool available, const QString &message);
-    static int compareVersions(const QString &left, const QString &right);
     int bestAlternativeSource() const;
     void suggestSourceSwitch(const QString &reason);
     void clearSourceSwitchSuggestion();

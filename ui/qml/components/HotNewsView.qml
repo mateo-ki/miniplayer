@@ -72,15 +72,15 @@ Item {
                         Layout.preferredHeight: 34
                         radius: root.theme.controlRadius
                         color: hotRefreshHover.hovered ? root.theme.accentMutedColor : root.theme.accentColor
-                        opacity: root.controller.hotNewsLoading ? 0.55 : 1.0
+                        opacity: services.hotNewsController.hotNewsLoading ? 0.55 : 1.0
 
                         HoverHandler { id: hotRefreshHover }
 
                         MouseArea {
                             anchors.fill: parent
-                            enabled: !root.controller.hotNewsLoading
+                            enabled: !services.hotNewsController.hotNewsLoading
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.controller.loadHotNews(root.selectedHotType)
+                            onClicked: services.hotNewsController.loadHotNews(root.selectedHotType)
                         }
 
                         Text {
@@ -119,7 +119,7 @@ Item {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     root.selectedHotType = modelData.value
-                                    root.controller.loadHotNews(modelData.value)
+                                    services.hotNewsController.loadHotNews(modelData.value)
                                 }
                             }
 
@@ -151,7 +151,7 @@ Item {
                         anchors.margins: 10
                         clip: true
                         spacing: 8
-                        model: root.controller.hotNewsItems
+                        model: services.hotNewsController.hotNewsItems
 
                         delegate: Rectangle {
                             readonly property bool hasTitle: (modelData.title || "").trim().length > 0
@@ -237,14 +237,14 @@ Item {
 
                     BusyIndicator {
                         anchors.centerIn: parent
-                        running: root.controller.hotNewsLoading
+                        running: services.hotNewsController.hotNewsLoading
                         visible: running
                     }
 
                     Text {
                         anchors.centerIn: parent
                         width: parent.width * 0.72
-                        visible: root.controller.hotNewsItems.length === 0 && !root.controller.hotNewsLoading
+                        visible: services.hotNewsController.hotNewsItems.length === 0 && !services.hotNewsController.hotNewsLoading
                         text: "点击刷新或切换类型加载热讯榜。"
                         color: root.theme.textMutedColor
                         font.family: root.theme.fontFamily
@@ -256,9 +256,9 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    visible: root.controller.hotNewsMessage.length > 0
-                    text: root.controller.hotNewsMessage
-                    color: root.controller.hotNewsMessage.indexOf("澶辫触") >= 0 || root.controller.hotNewsMessage.indexOf("娌℃湁") >= 0
+                    visible: services.hotNewsController.hotNewsMessage.length > 0
+                    text: services.hotNewsController.hotNewsMessage
+                    color: services.hotNewsController.hotNewsMessage.indexOf("澶辫触") >= 0 || services.hotNewsController.hotNewsMessage.indexOf("娌℃湁") >= 0
                         ? root.theme.dangerColor
                         : root.theme.accentColor
                     font.family: root.theme.fontFamily
@@ -271,8 +271,8 @@ Item {
 
     Component.onCompleted: {
         root.selectedHotType = root.controller.uiSetting("selectedHotType", root.selectedHotType)
-        if (root.controller.hotNewsItems.length === 0) {
-            root.controller.loadHotNews(root.selectedHotType)
+        if (services.hotNewsController.hotNewsItems.length === 0) {
+            services.hotNewsController.loadHotNews(root.selectedHotType)
         }
     }
 }

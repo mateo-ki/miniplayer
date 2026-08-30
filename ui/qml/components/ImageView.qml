@@ -97,7 +97,7 @@ Item {
                 continue
             var imageUrl = item.imageUrl
             imagePrefetchPool.remove(i)
-            root.controller.showPrefetchedImage(imageUrl)
+            services.imageController.showPrefetchedImage(imageUrl)
             Qt.callLater(root.refillImagePrefetchPool)
             return true
         }
@@ -105,7 +105,7 @@ Item {
     }
 
     function refillImagePrefetchPool() {
-        if (root.controller.imageLoading)
+        if (services.imageController.imageLoading)
             return
         var apiUrl = root.currentImageApiUrl()
         if (!apiUrl || apiUrl.length === 0)
@@ -113,11 +113,11 @@ Item {
         while (imagePrefetchPool.count + imagePrefetchPending < imagePoolTargetSize
                 && imagePrefetchPending < imagePrefetchConcurrency) {
             imagePrefetchPending += 1
-            root.controller.prefetchImage(apiUrl)
+            services.imageController.prefetchImage(apiUrl)
         }
     }
     function requestRandomImage(allowSourceSwitch) {
-        if (root.controller.imageLoading)
+        if (services.imageController.imageLoading)
             return
         if (allowSourceSwitch !== false
                 && refreshMode === "different"
@@ -132,15 +132,15 @@ Item {
         initialImageRequested = true
         var apiUrl = root.currentImageApiUrl()
         if (!root.consumePrefetchedImage(apiUrl))
-            root.controller.loadRandomImage(apiUrl)
+            services.imageController.loadRandomImage(apiUrl)
         Qt.callLater(root.refillImagePrefetchPool)
     }
 
     function ensureInitialImage() {
         root.selectPreferredImageSite()
         if (initialImageRequested
-                || root.controller.imageLoading
-                || root.controller.currentImageDisplayUrl.length > 0) {
+                || services.imageController.imageLoading
+                || services.imageController.currentImageDisplayUrl.length > 0) {
             return
         }
         root.requestRandomImage()
@@ -173,7 +173,7 @@ Item {
         repeat: true
         running: root.active && root.autoRefreshMs > 0
         onTriggered: {
-            if (!root.controller.imageLoading)
+            if (!services.imageController.imageLoading)
                 root.requestRandomImage()
         }
     }
@@ -262,13 +262,13 @@ Item {
                             Layout.preferredHeight: 38
                             radius: root.theme.controlRadius
                             color: imageChangeHover.hovered ? root.theme.accentMutedColor : root.theme.accentColor
-                            opacity: root.controller.imageLoading ? 0.58 : 1.0
+                            opacity: services.imageController.imageLoading ? 0.58 : 1.0
 
                             HoverHandler { id: imageChangeHover }
 
                             MouseArea {
                                 anchors.fill: parent
-                                enabled: !root.controller.imageLoading
+                                enabled: !services.imageController.imageLoading
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: root.requestRandomImage()
                             }
@@ -308,11 +308,11 @@ Item {
                                 ToolButton {
                                     width: 36
                                     height: 36
-                                    enabled: root.controller.currentImageUrl.length > 0
+                                    enabled: services.imageController.currentImageUrl.length > 0
                                         && randomImage.status === Image.Ready
-                                        && !root.controller.imageLoading
+                                        && !services.imageController.imageLoading
                                     opacity: enabled ? 1.0 : 0.38
-                                    onClicked: root.controller.copyCurrentImage()
+                                    onClicked: services.imageController.copyCurrentImage()
                                     ToolTip.visible: hovered
                                     ToolTip.text: root.strings.copyLabel
                                     background: Rectangle {
@@ -332,11 +332,11 @@ Item {
                                 ToolButton {
                                     width: 36
                                     height: 36
-                                    enabled: root.controller.currentImageUrl.length > 0
+                                    enabled: services.imageController.currentImageUrl.length > 0
                                         && randomImage.status === Image.Ready
-                                        && !root.controller.imageLoading
+                                        && !services.imageController.imageLoading
                                     opacity: enabled ? 1.0 : 0.38
-                                    onClicked: root.controller.saveCurrentImage()
+                                    onClicked: services.imageController.saveCurrentImage()
                                     ToolTip.visible: hovered
                                     ToolTip.text: root.strings.downloadLabel
                                     background: Rectangle {
@@ -580,8 +580,8 @@ Item {
 
                                     Text {
                                         text: "内存预载 " + imagePrefetchPool.count + "/" + root.imagePoolTargetSize
-                                            + " · 磁盘缓存图片 " + root.controller.imageDiskCacheCount
-                                            + " 张 · " + Math.round(root.controller.imageDiskCacheBytes / 1048576) + " MB"
+                                            + " · 磁盘缓存图片 " + services.imageController.imageDiskCacheCount
+                                            + " 张 · " + Math.round(services.imageController.imageDiskCacheBytes / 1048576) + " MB"
                                         color: root.theme.textMutedColor
                                         font.family: root.theme.fontFamily
                                         font.pixelSize: root.theme.captionSize
@@ -592,9 +592,9 @@ Item {
                                 Button {
                                     Layout.preferredHeight: 32
                                     text: "清理缓存"
-                                    enabled: root.controller.imageDiskCacheCount > 0
+                                    enabled: services.imageController.imageDiskCacheCount > 0
                                     onClicked: {
-                                        root.controller.clearImageCache()
+                                        services.imageController.clearImageCache()
                                         root.resetImagePrefetchPool()
                                         root.refillImagePrefetchPool()
                                     }
@@ -630,11 +630,11 @@ Item {
                         id: randomImage
                         anchors.fill: parent
                         anchors.margins: 12
-                        source: root.controller.currentImageDisplayUrl
+                        source: services.imageController.currentImageDisplayUrl
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         cache: true
-                        visible: root.controller.currentImageDisplayUrl.length > 0
+                        visible: services.imageController.currentImageDisplayUrl.length > 0
                         // 调试日志会把整张 base64 图片数据写进日志 (单行可达 ~1MB),
                         // 令 miniplayer.log 膨胀到上百 MB。已确认图片加载链路正常,
                         // 关闭这两行 console.log 防止日志暴涨。
@@ -652,17 +652,17 @@ Item {
 
                     BusyIndicator {
                         anchors.centerIn: parent
-                        running: root.controller.imageLoading
+                        running: services.imageController.imageLoading
                         visible: running
                     }
 
                     Text {
                         anchors.centerIn: parent
                         width: parent.width * 0.72
-                        visible: (root.controller.currentImageDisplayUrl.length === 0 || randomImage.status === Image.Error)
-                            && !root.controller.imageLoading
-                        text: root.controller.imageMessage.length > 0
-                            ? root.controller.imageMessage
+                        visible: (services.imageController.currentImageDisplayUrl.length === 0 || randomImage.status === Image.Error)
+                            && !services.imageController.imageLoading
+                        text: services.imageController.imageMessage.length > 0
+                            ? services.imageController.imageMessage
                             : root.strings.imageHint
                         color: root.theme.textMutedColor
                         font.family: root.theme.fontFamily
@@ -678,9 +678,9 @@ Item {
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     height: visible ? implicitHeight : 0
-                    visible: root.controller.imageMessage.length > 0
-                    text: root.controller.imageMessage
-                    color: root.controller.imageMessage.indexOf("失败") >= 0 || root.controller.imageMessage.indexOf("无效") >= 0
+                    visible: services.imageController.imageMessage.length > 0
+                    text: services.imageController.imageMessage
+                    color: services.imageController.imageMessage.indexOf("失败") >= 0 || services.imageController.imageMessage.indexOf("无效") >= 0
                         ? root.theme.dangerColor
                         : root.theme.accentColor
                     font.family: root.theme.fontFamily
@@ -722,7 +722,7 @@ Item {
             Image {
                 id: previewImage
                 anchors.fill: parent
-                source: root.controller.currentImageDisplayUrl
+                source: services.imageController.currentImageDisplayUrl
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: false
@@ -770,7 +770,7 @@ Item {
             }
         }
         function onImageStateChanged() {
-            if (!root.controller.imageLoading)
+            if (!services.imageController.imageLoading)
                 Qt.callLater(root.refillImagePrefetchPool)
         }
     }

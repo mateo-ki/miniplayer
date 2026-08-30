@@ -411,7 +411,7 @@ Rectangle {
                                         url: src.episodes[i].url
                                     })
                                 }
-                                playerController.downloadVideoEpisodes(root.vodName, root.vodPic, downloadEpisodes)
+                                services.videoCatalog.downloadVideoEpisodes(root.vodName, root.vodPic, downloadEpisodes)
                                 if (root.sidebar) root.sidebar.currentIndex = 3
                                 root.backRequested()
                             }
@@ -449,7 +449,7 @@ Rectangle {
                                         url: src.episodes[i].url
                                     })
                                 }
-                                playerController.saveVideoM3u8Episodes(root.vodName, root.vodPic, downloadEpisodes)
+                                services.videoCatalog.saveVideoM3u8Episodes(root.vodName, root.vodPic, downloadEpisodes)
                                 if (root.sidebar) root.sidebar.currentIndex = 3
                                 root.backRequested()
                             }

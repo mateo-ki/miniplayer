@@ -112,16 +112,16 @@ Item {
                             spacing: 8
                             Item { Layout.fillWidth: true }
                             Button {
-                                text: root.controller.updateChecking ? "检查中" : "检查更新"
-                                enabled: !root.controller.updateChecking && !root.controller.updateDownloading
-                                onClicked: root.controller.checkForUpdates()
+                                text: services.updateController.updateChecking ? "检查中" : "检查更新"
+                                enabled: !services.updateController.updateChecking && !services.updateController.updateDownloading
+                                onClicked: services.updateController.checkForUpdates()
                             }
                             Button {
-                                text: root.controller.updateDownloading ? "下载中" : "安装更新"
-                                enabled: root.controller.updateAvailable
-                                    && !root.controller.updateChecking
-                                    && !root.controller.updateDownloading
-                                onClicked: root.controller.downloadAndInstallUpdate()
+                                text: services.updateController.updateDownloading ? "下载中" : "安装更新"
+                                enabled: services.updateController.updateAvailable
+                                    && !services.updateController.updateChecking
+                                    && !services.updateController.updateDownloading
+                                onClicked: services.updateController.downloadAndInstallUpdate()
                             }
                         }
                     }
@@ -275,8 +275,8 @@ Item {
                     }
                     Button {
                         text: "刷新"
-                        enabled: !root.controller.hotNewsLoading
-                        onClicked: root.controller.loadHotNews(root.hotTypes[root.selectedHotTypeIndex].value)
+                        enabled: !services.hotNewsController.hotNewsLoading
+                        onClicked: services.hotNewsController.loadHotNews(root.hotTypes[root.selectedHotTypeIndex].value)
                     }
                 }
 
@@ -287,7 +287,7 @@ Item {
                     currentIndex: root.selectedHotTypeIndex
                     onActivated: function(index) {
                         root.selectedHotTypeIndex = index
-                        root.controller.loadHotNews(root.hotTypes[index].value)
+                        services.hotNewsController.loadHotNews(root.hotTypes[index].value)
                     }
                 }
 
@@ -297,7 +297,7 @@ Item {
                     Layout.fillHeight: true
                     clip: true
                     spacing: 7
-                    model: root.controller.hotNewsItems
+                    model: services.hotNewsController.hotNewsItems
 
                     delegate: Rectangle {
                         required property var modelData
@@ -353,8 +353,8 @@ Item {
 
                     Text {
                         anchors.centerIn: parent
-                        visible: root.controller.hotNewsItems.length === 0
-                            && !root.controller.hotNewsLoading
+                        visible: services.hotNewsController.hotNewsItems.length === 0
+                            && !services.hotNewsController.hotNewsLoading
                         text: "点击刷新加载热讯"
                         color: root.theme.textMutedColor
                         font.family: root.theme.fontFamily
@@ -362,7 +362,7 @@ Item {
                     }
                     BusyIndicator {
                         anchors.centerIn: parent
-                        running: root.controller.hotNewsLoading
+                        running: services.hotNewsController.hotNewsLoading
                         visible: running
                     }
                 }

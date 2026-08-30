@@ -127,6 +127,13 @@ qt_add_executable(MeloBox
     src/app/main.cpp
     src/app/AppBootstrap.cpp
     src/app/AppServices.cpp
+    src/common/MediaUtils.cpp
+    src/controllers/HotNewsController.cpp
+    src/controllers/ImageController.cpp
+    src/controllers/MemeController.cpp
+    src/controllers/UpdateController.cpp
+    src/controllers/VideoCatalogController.cpp
+    src/controllers/VoiceController.cpp
     src/controller/PlayerController.cpp
     src/media/ImageCacheService.cpp
 )
@@ -431,6 +438,7 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/common/constant.h
             tests/unit/models/ModelTests.cpp
             src/app/AppServices.cpp
+            src/common/MediaUtils.cpp
             src/controller/PlayerController.cpp
             src/mpv/MpvBackend.cpp
             src/core/PlayerEngine.cpp

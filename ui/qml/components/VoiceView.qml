@@ -215,7 +215,7 @@ Item {
                                             cursorShape: Qt.PointingHandCursor
                                             onClicked: {
                                                 root.selectedVoiceIndex = modelData.sourceIndex
-                                                root.controller.saveVoice(modelData.sourceIndex)
+                                                services.voiceController.saveVoice(modelData.sourceIndex)
                                             }
                                         }
                                         Text {
@@ -242,7 +242,7 @@ Item {
                                             cursorShape: Qt.PointingHandCursor
                                             onClicked: {
                                                 root.selectedVoiceIndex = modelData.sourceIndex
-                                                root.controller.copyVoice(modelData.sourceIndex)
+                                                services.voiceController.copyVoice(modelData.sourceIndex)
                                             }
                                         }
                                         Text {
@@ -262,8 +262,8 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    visible: root.controller.voiceMessage.length > 0
-                    text: root.controller.voiceMessage + (root.controller.currentVoiceUrl.length > 0 ? " · " + root.controller.currentVoiceUrl : "")
+                    visible: services.voiceController.voiceMessage.length > 0
+                    text: services.voiceController.voiceMessage + (services.voiceController.currentVoiceUrl.length > 0 ? " · " + services.voiceController.currentVoiceUrl : "")
                     color: root.theme.accentColor
                     font.family: root.theme.fontFamily
                     font.pixelSize: root.theme.captionSize
