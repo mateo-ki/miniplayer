@@ -1,6 +1,8 @@
 #include "models/LegadoSourceModel.h"
 
+#include <QClipboard>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -204,6 +206,23 @@ void LegadoSourceModel::importFromUrl(const QString &url) {
 
 void LegadoSourceModel::importFromText(const QString &text) {
     mergeJson(text.toUtf8(), QStringLiteral("粘贴内容"));
+}
+
+void LegadoSourceModel::importFromClipboard() {
+    const QClipboard *clipboard = QGuiApplication::clipboard();
+    const QString text = clipboard ? clipboard->text(QClipboard::Clipboard) : QString();
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        setMessage(QStringLiteral("剪贴板没有书源内容，请先复制书源 JSON 或链接"));
+        return;
+    }
+    // 复制的是书源链接时直接转下载
+    if (trimmed.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
+        || trimmed.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)) {
+        importFromUrl(trimmed);
+        return;
+    }
+    mergeJson(trimmed.toUtf8(), QStringLiteral("剪贴板"));
 }
 
 void LegadoSourceModel::mergeJson(const QByteArray &bytes, const QString &origin) {

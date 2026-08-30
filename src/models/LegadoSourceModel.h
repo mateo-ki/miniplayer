@@ -46,6 +46,8 @@ public:
 
     Q_INVOKABLE void importFromUrl(const QString &url);
     Q_INVOKABLE void importFromText(const QString &text);
+    // 文本框为空时的一键导入：读系统剪贴板；内容是链接则自动转下载
+    Q_INVOKABLE void importFromClipboard();
     Q_INVOKABLE void removeSource(int row);
     Q_INVOKABLE void clearAll();
     Q_INVOKABLE void selectSource(int row);

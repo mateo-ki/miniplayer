@@ -200,11 +200,15 @@ Rectangle {
                         text: "导入粘贴内容"
                         font.family: root.theme.fontFamily
                         enabled: root.sourceModel && !root.sourceModel.importing
-                            && importTextInput.text.trim().length > 0
                         onClicked: {
-                            if (root.sourceModel) {
+                            if (!root.sourceModel)
+                                return
+                            if (importTextInput.text.trim().length > 0) {
                                 root.sourceModel.importFromText(importTextInput.text)
                                 importTextInput.text = ""
+                            } else {
+                                // 文本框为空时读系统剪贴板（JSON 或书源链接）
+                                root.sourceModel.importFromClipboard()
                             }
                         }
                     }
@@ -501,7 +505,13 @@ Rectangle {
         // ── 状态栏 ──
         Text {
             Layout.fillWidth: true
-            text: root.model ? root.model.message : ""
+            text: {
+            var importMsg = root.sourceModel ? root.sourceModel.message : ""
+            var bookMsg = root.model ? root.model.message : ""
+            if (importMsg.length > 0 && bookMsg.length > 0)
+                return importMsg + "　|　" + bookMsg
+            return importMsg.length > 0 ? importMsg : bookMsg
+        }
             color: root.theme.textMutedColor
             font.pixelSize: 11
             font.family: root.theme.fontFamily
