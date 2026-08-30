@@ -49,12 +49,17 @@ else()
     if(NOT MELOBOX_WDEPLOYQT_EXE)
         message(FATAL_ERROR "windeployqt not found under ${MELOBOX_QT_PLUGIN_BASE}/tools/Qt6/bin")
     endif()
+    message(STATUS "DeployRuntime: windeployqt = ${MELOBOX_WDEPLOYQT_EXE}")
     execute_process(COMMAND "${MELOBOX_WDEPLOYQT_EXE}"
         --release --no-translations
         "--qmldir=${MELOBOX_SOURCE_DIR}/ui/qml"
-        "${MELOBOX_TARGET_FILE}"
+        "${MELOBOX_TARGET}"
+        OUTPUT_VARIABLE _melobox_wd_out
+        ERROR_VARIABLE _melobox_wd_err
         RESULT_VARIABLE rc)
     if(NOT rc EQUAL 0)
+        message(STATUS "${_melobox_wd_out}")
+        message(STATUS "${_melobox_wd_err}")
         message(FATAL_ERROR "windeployqt failed with exit code ${rc}")
     endif()
 endif()
