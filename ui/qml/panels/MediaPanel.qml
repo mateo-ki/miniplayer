@@ -49,11 +49,11 @@ Rectangle {
                     Layout.preferredWidth: 60
                     Layout.preferredHeight: 60
                     radius: 10
-                    color: theme ? theme.accentMutedColor : "#7a4a17"
+                    color: theme ? theme.accentMutedColor : "#14382c"
 
                     Text {
                         anchors.centerIn: parent
-                        color: theme ? theme.accentColor : "#f28c28"
+                        color: theme ? theme.accentColor : "#10b981"
                         text: root.emptyState ? "Open" : "Now"
                         font.family: theme ? theme.fontFamily : "Segoe UI"
                         font.pixelSize: 18
@@ -213,13 +213,13 @@ Rectangle {
                             Layout.preferredHeight: 28
                             radius: 6
                             color: index === root.currentIndex
-                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                ? (root.theme ? root.theme.accentMutedColor : "#14382c")
                                 : (root.theme ? root.theme.panelRaisedColor : "#242424")
 
                             Text {
                                 anchors.centerIn: parent
                                 color: index === root.currentIndex
-                                    ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                    ? (root.theme ? root.theme.accentColor : "#10b981")
                                     : (root.theme ? root.theme.textMutedColor : "#858585")
                                 text: index + 1
                                 font.family: root.theme ? root.theme.fontFamily : "Segoe UI"

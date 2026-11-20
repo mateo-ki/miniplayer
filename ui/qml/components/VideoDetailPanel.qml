@@ -81,6 +81,8 @@ Rectangle {
         if (url.length === 0) return ""
         if (url.indexOf("//") === 0) return "https:" + url
         if (url.indexOf("://") > 0) return url
+        // pool 统一点播源的分集标识（token）：交给 /api/vod/play 解析，不做 origin 拼接
+        if (url.indexOf("/") < 0 && url.indexOf(".") < 0) return url
 
         var current = services.apiSiteModel.currentIndex
         var base = current >= 0 ? services.apiSiteModel.baseUrlAt(current) : ""
@@ -174,12 +176,23 @@ Rectangle {
                     onClicked: root.backRequested()
                 }
 
-                Text {
+                RowLayout {
                     anchors.centerIn: parent
-                    text: "← 返回"
-                    color: backMouse.containsMouse ? theme.accentColor : theme.textSecondaryColor
-                    font.pixelSize: 12
-                    font.family: theme.fontFamily
+                    spacing: 4
+
+                    Text {
+                        text: "\uE72B"
+                        font.family: theme.iconFontFamily
+                        font.pixelSize: 11
+                        color: backMouse.containsMouse ? theme.accentColor : theme.textSecondaryColor
+                    }
+
+                    Text {
+                        text: "返回"
+                        color: backMouse.containsMouse ? theme.accentColor : theme.textSecondaryColor
+                        font.pixelSize: 12
+                        font.family: theme.fontFamily
+                    }
                 }
             }
 
@@ -543,9 +556,14 @@ Rectangle {
                                 width: 72
                                 height: 28
                                 radius: 4
-                                color: epMouse.containsMouse ? theme.accentMutedColor : theme.panelColor
-                                border.color: epMouse.containsMouse ? theme.accentColor : theme.borderColor
-                                border.width: 1
+                                readonly property bool isCurrent: (root.currentEpisodePage * root.episodesPerPage + index) === playerController.currentIndex
+                                color: isCurrent
+                                    ? theme.accentMutedColor
+                                    : (epMouse.containsMouse ? theme.panelRaisedColor : theme.panelColor)
+                                border.color: isCurrent
+                                    ? theme.accentColor
+                                    : (epMouse.containsMouse ? theme.accentColor : theme.borderColor)
+                                border.width: isCurrent ? 1.5 : 1
 
                                 MouseArea {
                                     id: epMouse
@@ -585,8 +603,9 @@ Rectangle {
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.name
-                                    color: theme.textPrimaryColor
+                                    color: parent.isCurrent ? theme.accentColor : theme.textPrimaryColor
                                     font.pixelSize: 11
+                                    font.bold: parent.isCurrent
                                     font.family: theme.fontFamily
                                     elide: Text.ElideRight
                                     width: parent.width - 8

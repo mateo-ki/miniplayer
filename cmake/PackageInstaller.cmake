@@ -34,12 +34,8 @@ file(COPY "${MELOBOX_BUILD_OUTPUT_DIR}/"
     PATTERN "*.log" EXCLUDE
 )
 
-if(DEFINED MELOBOX_BUNDLE_MPV AND NOT MELOBOX_BUNDLE_MPV)
-    file(REMOVE
-        "${MELOBOX_PACKAGE_DIR}/libmpv-2.dll"
-        "${MELOBOX_PACKAGE_DIR}/mpv-2.dll"
-    )
-endif()
+# UPX 加壳已移除: 实测加壳后的 exe 启动报 0xc0000142 (DLL 初始化失败),
+# 且压缩壳让二进制泄漏扫描变成假阴性。保护以密钥 XOR 混淆为准。
 
 file(GLOB meloBoxPackageArtifacts
     "${MELOBOX_PACKAGE_DIR}/*.lib"
@@ -63,7 +59,7 @@ file(REMOVE_RECURSE
 
 set(meloBoxRequiredFiles
     "MeloBox.exe"
-    "dmghg_key.pem"
+    "vod.txt"
     "libmpv-2.dll"
     "Qt6Core.dll"
     "Qt6Gui.dll"

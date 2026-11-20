@@ -49,11 +49,11 @@ Rectangle {
                     height: 68
                     radius: 12
                     anchors.horizontalCenter: parent.horizontalCenter
-                    color: theme ? theme.accentMutedColor : "#7a4a17"
+                    color: theme ? theme.accentMutedColor : "#14382c"
 
                     Text {
                         anchors.centerIn: parent
-                        color: theme ? theme.accentColor : "#f28c28"
+                        color: theme ? theme.accentColor : "#10b981"
                         text: root.emptyState ? "Open" : "Now"
                         font.family: theme ? theme.fontFamily : "Segoe UI"
                         font.pixelSize: 20

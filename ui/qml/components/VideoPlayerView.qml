@@ -114,6 +114,7 @@ Item {
         visible: !root.useGestureBackButton && root.hostWindow.visible
             && root.pageActive && !root.browserVisible
             && embeddedVideoBrowser.detailActive
+            && root.hostWindow.visibility !== Window.FullScreen
         flags: Qt.Tool | Qt.FramelessWindowHint
         transientParent: root.hostWindow
         color: "transparent"

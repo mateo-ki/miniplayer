@@ -94,9 +94,9 @@ Window {
 
         Repeater {
             model: [
-                { icon: root.controller.volume <= 0.001 ? "×" : "♪", label: "音量", action: "volume" },
-                { icon: "↻", label: "重载", action: "reload" },
-                { icon: "↓", label: "下一条", action: "next" }
+                { icon: root.controller.volume <= 0.001 ? "\uE74F" : "\uE767", label: "音量", action: "volume" },
+                { icon: "\uE72C", label: "重载", action: "reload" },
+                { icon: "\uE74B", label: "下一条", action: "next" }
             ]
 
             delegate: Column {
@@ -108,7 +108,7 @@ Window {
                     width: 52
                     height: 52
                     radius: 26
-                    color: actionHover.hovered ? "#e0f28c28" : "#b5121720"
+                    color: actionHover.hovered ? "#e010b981" : "#c0141517"
                     border.color: "#66ffffff"
                     border.width: 1
 
@@ -134,9 +134,10 @@ Window {
                     Text {
                         anchors.centerIn: parent
                         text: modelData.icon
+                        font.family: root.theme ? root.theme.iconFontFamily : "Segoe MDL2 Assets"
+                        renderType: Text.NativeRendering
                         color: "#ffffff"
-                        font.pixelSize: 22
-                        font.bold: true
+                        font.pixelSize: 20
                     }
                 }
                 Text {
@@ -246,7 +247,9 @@ Window {
         z: 5
         Text {
             anchors.centerIn: parent
-            text: "■"
+            text: "\uE768"
+            font.family: root.theme ? root.theme.iconFontFamily : "Segoe MDL2 Assets"
+            renderType: Text.NativeRendering
             color: "#ffffff"
             font.pixelSize: 28
         }

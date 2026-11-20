@@ -153,7 +153,7 @@ Rectangle {
                 radius: 22
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: "transparent"
-                border.color: root.theme ? root.theme.accentColor : "#f28c28"
+                border.color: root.theme ? root.theme.accentColor : "#10b981"
                 border.width: 3
 
                 Rectangle {
@@ -161,7 +161,7 @@ Rectangle {
                     height: 3
                     anchors.verticalCenter: parent.top
                     anchors.horizontalCenter: parent.horizontalCenter
-                    color: root.theme ? root.theme.accentColor : "#f28c28"
+                    color: root.theme ? root.theme.accentColor : "#10b981"
                     transformOrigin: Item.Bottom
 
                     NumberAnimation on rotation {

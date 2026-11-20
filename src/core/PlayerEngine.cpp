@@ -136,6 +136,32 @@ void PlayerEngine::close() {
     imageHlsMode_ = false;
 }
 
+void PlayerEngine::shutdownFast() {
+    if (state_ != State::Idle) {
+        if (imageHlsMode_) {
+            stopImageHlsPipeline();
+        } else {
+            stopPipeline(400);
+            flushQueues();
+        }
+        pendingSeekSec_ = -1.0;
+        eofReached_ = false;
+        state_ = State::Idle;
+        emit stateChanged();
+    }
+    if (thumbnailWorker_) {
+        thumbnailWorker_->abort();
+        thumbnailThread_.wait(300);
+        if (thumbnailThread_.isFinished())
+            delete thumbnailWorker_;
+        thumbnailWorker_ = nullptr;
+        disconnect(&thumbnailThread_, nullptr, nullptr, nullptr);
+    }
+    session_.close();
+    currentPath_.clear();
+    syncTimer_->stop();
+}
+
 void PlayerEngine::abortPipeline() {
     syncTimer_->stop();
     pipelineRunning_ = false;
@@ -785,6 +811,7 @@ void PlayerEngine::presentFirstFrame() {
 void PlayerEngine::startPipeline() {
     session_.resumeIo();
     pipelineRunning_ = true;
+    demuxEofPending_ = false;
     networkBuffering_ = session_.isNetwork();
     audioStartDelayedForBuffer_ = false;
     if (networkBuffering_) {
@@ -800,6 +827,7 @@ void PlayerEngine::startPipeline() {
     demuxWorker_->moveToThread(&demuxThread_);
     connect(&demuxThread_, &QThread::started, demuxWorker_, &DemuxWorker::start);
     connect(demuxWorker_, &DemuxWorker::finished, &demuxThread_, &QThread::quit);
+    connect(demuxWorker_, &DemuxWorker::finished, this, &PlayerEngine::onDemuxEof);
     connect(demuxWorker_, &DemuxWorker::error, this, [this](const QString &msg) {
         Logger::instance().error("DemuxWorker error: " + msg);
     });
@@ -814,14 +842,8 @@ void PlayerEngine::startPipeline() {
         audioOutput_->setVolume(volume_);
         audioOutput_->setPlaybackRate(playbackRate_);
         connect(audioOutput_, &AudioOutput::finished, this, [this]() {
-            if (!pipelineRunning_) return;
             Logger::instance().info("PlayerEngine: playback finished (EOF)");
-            pipelineRunning_ = false;
-            eofReached_ = true;
-            stopPipeline();
-            flushQueues();
-            state_ = State::Paused;
-            emit stateChanged();
+            finishPlayback();
         });
         connect(audioOutput_, &AudioOutput::positionUpdated, this, [this](double sec) {
             emit positionUpdated(sec);
@@ -844,13 +866,8 @@ void PlayerEngine::startPipeline() {
         // If no audio stream, detect EOF from video worker
         if (audioStreamIndex_ < 0) {
             connect(videoDecodeWorker_, &VideoDecodeWorker::finished, this, [this]() {
-                if (!pipelineRunning_) return;
                 Logger::instance().info("PlayerEngine: playback finished (EOF, no audio)");
-                pipelineRunning_ = false;
-                stopPipeline();
-                flushQueues();
-                state_ = State::Idle;
-                emit stateChanged();
+                finishPlayback();
             });
         }
     }
@@ -872,7 +889,7 @@ void PlayerEngine::startAudioOutputThread() {
     audioThread_.start();
 }
 
-void PlayerEngine::stopPipeline() {
+void PlayerEngine::stopPipeline(int waitMsPerThread) {
     syncTimer_->stop();
     pipelineRunning_ = false;
     session_.abortIo();
@@ -887,11 +904,16 @@ void PlayerEngine::stopPipeline() {
     if (demuxWorker_) demuxWorker_->abort();
     if (videoDecodeWorker_) videoDecodeWorker_->abort();
 
+    // 2.5 Worker 退出 run() 后线程还停在事件循环里 (quit 连接偶发未生效),
+    // 显式 quit 保证 wait() 能等到, 否则线程被 "stuck, leaking"。
+    demuxThread_.quit();
+    audioThread_.quit();
+    videoThread_.quit();
+
     // 3. Wait for threads — abort checks at every stage make them exit within ~10ms
-    const int waitMs = session_.isNetwork() ? 3000 : 3000;
-    demuxThread_.wait(waitMs);
-    audioThread_.wait(waitMs);
-    videoThread_.wait(waitMs);
+    demuxThread_.wait(waitMsPerThread);
+    audioThread_.wait(waitMsPerThread);
+    videoThread_.wait(waitMsPerThread);
 
     // 4. Clean up workers
     if (demuxThread_.isFinished()) {
@@ -924,6 +946,34 @@ void PlayerEngine::stopPipeline() {
     videoFrameQueue_.resume();
 
     Logger::instance().info("PlayerEngine: pipeline stopped");
+}
+
+void PlayerEngine::onDemuxEof() {
+    if (!pipelineRunning_ || demuxEofPending_)
+        return;
+    demuxEofPending_ = true;
+    // 解封装 EOF 后给音视频 worker 一点时间把队列尾包消耗完再收尾。
+    // 独立于 AudioOutput::finished 的兜底: 那条信号偶发不送达时 (实测
+    // 虚拟机环境出现过), 这里保证播完仍会触发 ended -> 自动切下一条。
+    QTimer::singleShot(800, this, [this]() {
+        demuxEofPending_ = false;
+        if (!pipelineRunning_)
+            return;
+        Logger::instance().info("PlayerEngine: playback finished (EOF, demux drain)");
+        finishPlayback();
+    });
+}
+
+void PlayerEngine::finishPlayback() {
+    const bool wasRunning = pipelineRunning_;
+    pipelineRunning_ = false;
+    eofReached_ = true;
+    stopPipeline();
+    flushQueues();
+    if (!wasRunning)
+        return;
+    state_ = State::Paused;
+    emit stateChanged();
 }
 
 void PlayerEngine::flushQueues() {

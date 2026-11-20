@@ -1,21 +1,22 @@
 import QtQuick
 
 QtObject {
-    readonly property color windowColor: "#0e1116"
-    readonly property color chromeColor: "#121722"
-    readonly property color panelColor: "#171d27"
-    readonly property color panelRaisedColor: "#202838"
-    readonly property color surfaceColor: "#0b0f15"
-    readonly property color borderColor: "#344052"
-    readonly property color subtleBorderColor: "#252d3a"
-    readonly property color accentColor: "#e7a448"
-    readonly property color accentMutedColor: "#3b2a16"
-    readonly property color textPrimaryColor: "#f4f7fb"
-    readonly property color textSecondaryColor: "#b9c2d0"
-    readonly property color textMutedColor: "#7f8a9c"
-    readonly property color successColor: "#54c48a"
-    readonly property color warningColor: "#e7b85d"
-    readonly property color dangerColor: "#e06c63"
+    readonly property color windowColor: "#141417"
+    readonly property color chromeColor: "#0e0e10"
+    readonly property color panelColor: "#1c1c20"
+    readonly property color panelRaisedColor: "#26262c"
+    readonly property color surfaceColor: "#18181c"
+    readonly property color borderColor: "#2a2a30"
+    readonly property color subtleBorderColor: "#1a1a1e"
+    readonly property color accentColor: "#38bdf8"
+    readonly property color accentMutedColor: "#0e263a"
+    readonly property color sidebarActiveColor: "#202026"
+    readonly property color textPrimaryColor: "#f0f0f5"
+    readonly property color textSecondaryColor: "#a0a0ac"
+    readonly property color textMutedColor: "#737380"
+    readonly property color successColor: "#22c55e"
+    readonly property color warningColor: "#f59e0b"
+    readonly property color dangerColor: "#ef4444"
 
     readonly property int windowRadius: 14
     readonly property int panelRadius: 10
@@ -33,4 +34,12 @@ QtObject {
     readonly property int bodySize: 13
     readonly property int captionSize: 11
     readonly property string fontFamily: "Segoe UI"
+    readonly property string iconFontFamily: {
+        var families = Qt.fontFamilies();
+        if (families.indexOf("Segoe Fluent Icons") !== -1)
+            return "Segoe Fluent Icons";
+        if (families.indexOf("Segoe MDL2 Assets") !== -1)
+            return "Segoe MDL2 Assets";
+        return "Segoe UI Symbol";
+    }
 }

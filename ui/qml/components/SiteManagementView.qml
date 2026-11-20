@@ -237,6 +237,7 @@ Rectangle {
         property color fillColor: root.theme.surfaceColor
         property color hoverColor: root.theme.panelRaisedColor
         property color labelColor: root.theme.textSecondaryColor
+        property string fontFam: root.theme.fontFamily
         property bool outlined: true
         property bool enabledState: true
         signal clicked()
@@ -265,7 +266,7 @@ Rectangle {
             color: button.labelColor
             font.pixelSize: 12
             font.bold: true
-            font.family: root.theme.fontFamily
+            font.family: button.fontFam
         }
     }
 
@@ -510,10 +511,10 @@ Rectangle {
 
                                     Text {
                                         anchors.centerIn: parent
-                                        text: "☰"
+                                        text: "\uE700"
                                         color: root.sortingEnabled ? theme.textSecondaryColor : theme.textMutedColor
-                                        font.pixelSize: 18
-                                        font.family: theme.fontFamily
+                                        font.pixelSize: 13
+                                        font.family: theme.iconFontFamily
                                     }
 
                                     ToolTip.visible: reorderMouse.containsMouse
@@ -644,7 +645,8 @@ Rectangle {
                                 }
 
                                 ActionButton {
-                                    label: model.premium ? "★" : "☆"
+                                    label: model.premium ? "\uE735" : "\uE734"
+                                    fontFam: theme.iconFontFamily
                                     Layout.preferredWidth: 36
                                     labelColor: model.premium ? "#ffd86b" : theme.textSecondaryColor
                                     onClicked: {

@@ -205,11 +205,11 @@ Rectangle {
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 48
                     radius: 8
-                    color: theme ? theme.accentMutedColor : "#7a4a17"
+                    color: theme ? theme.accentMutedColor : "#14382c"
 
                     Text {
                         anchors.centerIn: parent
-                        color: theme ? theme.accentColor : "#f28c28"
+                        color: theme ? theme.accentColor : "#10b981"
                         text: root.emptyState ? "?" : "Now"
                         font.family: theme ? theme.fontFamily : "Segoe UI"
                         font.pixelSize: 14
@@ -321,10 +321,10 @@ Rectangle {
                             Layout.preferredHeight: 32
                             radius: 6
                             color: modelData.index === root.currentAudioTrack
-                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                ? (root.theme ? root.theme.accentMutedColor : "#14382c")
                                 : (itemTrackHover.hovered ? (root.theme ? root.theme.panelRaisedColor : "#1a1a1a") : (root.theme ? root.theme.surfaceColor : "#151515"))
                             border.color: modelData.index === root.currentAudioTrack
-                                ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                ? (root.theme ? root.theme.accentColor : "#10b981")
                                 : "transparent"
                             border.width: 1
 
@@ -377,7 +377,7 @@ Rectangle {
                             Layout.preferredHeight: 18
                             radius: 9
                             color: root.subtitlesEnabled
-                                ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                ? (root.theme ? root.theme.accentColor : "#10b981")
                                 : (root.theme ? root.theme.panelRaisedColor : "#242424")
                             border.color: root.theme ? root.theme.borderColor : "#353535"
                             border.width: 1
@@ -411,10 +411,10 @@ Rectangle {
                             Layout.preferredHeight: 32
                             radius: 6
                             color: modelData.index === root.currentSubtitleTrack
-                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                ? (root.theme ? root.theme.accentMutedColor : "#14382c")
                                 : (subtitleTrackHover.hovered ? (root.theme ? root.theme.panelRaisedColor : "#1a1a1a") : (root.theme ? root.theme.surfaceColor : "#151515"))
                             border.color: modelData.index === root.currentSubtitleTrack
-                                ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                ? (root.theme ? root.theme.accentColor : "#10b981")
                                 : "transparent"
                             border.width: 1
                             opacity: root.subtitlesEnabled ? 1.0 : 0.4
@@ -493,7 +493,7 @@ Rectangle {
                             Layout.preferredWidth: 56
                             Layout.preferredHeight: 24
                             radius: 6
-                            color: sourceSearchMouse.hovered ? (root.theme ? root.theme.accentMutedColor : "#7a4a17") : (root.theme ? root.theme.panelRaisedColor : "#242424")
+                            color: sourceSearchMouse.hovered ? (root.theme ? root.theme.accentMutedColor : "#14382c") : (root.theme ? root.theme.panelRaisedColor : "#242424")
                             border.color: root.theme ? root.theme.borderColor : "#353535"
                             border.width: 1
                             enabled: root.currentVodName.length > 0 && root.apiSiteModel
@@ -530,10 +530,10 @@ Rectangle {
                             height: 28
                             radius: 6
                             color: index === root.sourceSiteIndex
-                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                ? (root.theme ? root.theme.accentMutedColor : "#14382c")
                                 : (siteHover.hovered ? (root.theme ? root.theme.panelRaisedColor : "#202020") : (root.theme ? root.theme.panelColor : "#242424"))
                             border.color: index === root.sourceSiteIndex
-                                ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                ? (root.theme ? root.theme.accentColor : "#10b981")
                                 : (root.theme ? root.theme.borderColor : "#353535")
                             border.width: 1
 
@@ -586,7 +586,7 @@ Rectangle {
                                 height: 42
                                 radius: 8
                                 color: sourceResultHover.hovered ? "#1d1d1d" : "transparent"
-                                border.color: sourceResultHover.hovered ? (root.theme ? root.theme.accentColor : "#f28c28") : "transparent"
+                                border.color: sourceResultHover.hovered ? (root.theme ? root.theme.accentColor : "#10b981") : "transparent"
                                 border.width: 1
 
                                 HoverHandler { id: sourceResultHover }
@@ -628,7 +628,7 @@ Rectangle {
                                     }
 
                                     Text {
-                                        color: root.theme ? root.theme.accentColor : "#f28c28"
+                                        color: root.theme ? root.theme.accentColor : "#10b981"
                                         text: "载入"
                                         font.pixelSize: 11
                                         font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
@@ -696,13 +696,13 @@ Rectangle {
                             Layout.preferredHeight: 24
                             radius: 6
                             color: index === root.currentIndex
-                                ? (root.theme ? root.theme.accentMutedColor : "#7a4a17")
+                                ? (root.theme ? root.theme.accentMutedColor : "#14382c")
                                 : (root.theme ? root.theme.panelRaisedColor : "#242424")
 
                             Text {
                                 anchors.centerIn: parent
                                 color: index === root.currentIndex
-                                    ? (root.theme ? root.theme.accentColor : "#f28c28")
+                                    ? (root.theme ? root.theme.accentColor : "#10b981")
                                     : (root.theme ? root.theme.textMutedColor : "#858585")
                                 text: index + 1
                                 font.pixelSize: 10

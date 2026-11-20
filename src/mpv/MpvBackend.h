@@ -78,6 +78,7 @@ private:
     bool loadLibrary();
     bool initialize();
     void pollEvents();
+    void logVideoGeometry();
     QString mpvError(int code) const;
     void command(std::initializer_list<QByteArray> args);
 
@@ -88,6 +89,13 @@ private:
     qint64 pendingWindowId_ = 0;
     qint64 positionMs_ = 0;
     qint64 durationMs_ = 0;
+    // 分辨率探针：源=解码出来的尺寸，输出=真正画到子窗口上的尺寸。
+    // 两者的比值才是"糊"该不该算在缩放头上，光看线路标签不算证据。
+    qint64 srcWidth_ = 0;
+    qint64 srcHeight_ = 0;
+    qint64 outWidth_ = 0;
+    qint64 outHeight_ = 0;
+    QString loggedVideoGeometry_;
     double cacheDurationSec_ = 0.0;
     double cacheTimeSec_ = -1.0;
     bool ignoreNextEndFile_ = false;

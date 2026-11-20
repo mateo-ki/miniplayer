@@ -15,7 +15,7 @@ option(MELOBOX_BUNDLE_MPV "Bundle libmpv runtime in packaged builds" ON)
 option(MELOBOX_ENABLE_RUNTIME_DEPLOYMENT "Run Qt/vcpkg runtime deployment after building" OFF)
 set(MELOBOX_FFMPEG_PROVIDER "auto" CACHE STRING "FFmpeg discovery strategy: auto or custom-cache")
 set_property(CACHE MELOBOX_FFMPEG_PROVIDER PROPERTY STRINGS auto custom-cache)
-set(MELOBOX_APP_VERSION "1.0" CACHE STRING "MeloBox application version shown in the UI and update checks")
+set(MELOBOX_APP_VERSION "1.2.7" CACHE STRING "MeloBox application version shown in the UI and update checks")
 set(MELOBOX_UPDATE_OWNER "" CACHE STRING "GitHub owner used by the built-in updater")
 set(MELOBOX_UPDATE_REPO "" CACHE STRING "GitHub repository used by the built-in updater")
 
@@ -24,35 +24,6 @@ find_package(PNG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 qt_standard_project_setup()
-if(MELOBOX_BUILD_TESTS)
-    enable_testing()
-
-    # 书源规则引擎测试只依赖 Qt Core/Qml/Network，与 FFmpeg 无关，
-    # 单独成目标以便在缺少 FFmpeg 的环境也能验证书源解析。
-    add_executable(miniPlayerBookTests
-        tests/unit/book/LegadoRuleTests.cpp
-        src/book/BookSource.cpp
-        src/book/HtmlDom.cpp
-        src/book/RuleEngine.cpp
-        src/book/LegadoClient.cpp
-        src/models/LegadoSourceModel.cpp
-        src/models/LegadoBookModel.cpp
-        src/infrastructure/Logger.cpp
-    )
-
-    target_include_directories(miniPlayerBookTests PRIVATE
-        src
-    )
-
-    target_link_libraries(miniPlayerBookTests PRIVATE
-        Qt6::Core
-        Qt6::Qml
-        Qt6::Network
-        Qt6::Test
-    )
-
-    add_test(NAME miniPlayerBookTests COMMAND $<TARGET_FILE:miniPlayerBookTests>)
-endif()
 
 if(COMMAND qt_policy)
     qt_policy(SET QTP0001 NEW)
@@ -61,6 +32,7 @@ endif()
 
 add_library(miniPlayerInfrastructure STATIC
     src/infrastructure/Logger.cpp
+    src/infrastructure/PoolApi.cpp
 )
 
 target_include_directories(miniPlayerInfrastructure PUBLIC
@@ -69,6 +41,7 @@ target_include_directories(miniPlayerInfrastructure PUBLIC
 
 target_link_libraries(miniPlayerInfrastructure PUBLIC
     Qt6::Core
+    Qt6::Network
 )
 
 add_library(miniPlayerModels STATIC
@@ -80,15 +53,9 @@ add_library(miniPlayerModels STATIC
     src/models/DownloadModel.cpp
     src/models/DmghgAnimeModel.cpp
     src/media/DmghgClient.cpp
-    src/models/BeeVideoModel.cpp
-    src/models/BeeScheduleModel.cpp
-    src/media/BeeClient.cpp
-    src/book/BookSource.cpp
-    src/book/HtmlDom.cpp
-    src/book/RuleEngine.cpp
-    src/book/LegadoClient.cpp
-    src/models/LegadoSourceModel.cpp
-    src/models/LegadoBookModel.cpp
+    src/media/DmghgSecrets.cpp
+    src/dmghgv3/MagicCrypto.cpp
+    src/dmghgv3/DmghgClientV3.cpp
 )
 
 target_include_directories(miniPlayerModels PUBLIC
@@ -128,13 +95,15 @@ qt_add_executable(MeloBox
     src/app/AppBootstrap.cpp
     src/app/AppServices.cpp
     src/common/MediaUtils.cpp
-    src/controllers/HotNewsController.cpp
-    src/controllers/ImageController.cpp
-    src/controllers/MemeController.cpp
-    src/controllers/UpdateController.cpp
-    src/controllers/VideoCatalogController.cpp
-    src/controllers/VoiceController.cpp
+    src/controller/ImageController.cpp
+    src/controller/MemeController.cpp
+    src/controller/PoolMeController.cpp
+    src/controller/PoolChatController.cpp
+    src/controller/UpdateController.cpp
+    src/controller/VideoCatalogController.cpp
+    src/controller/VoiceController.cpp
     src/controller/PlayerController.cpp
+    src/controller/AuthController.cpp
     src/media/ImageCacheService.cpp
 )
 
@@ -152,6 +121,15 @@ if(WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/appicon.ico"
             "$<TARGET_FILE_DIR:MeloBox>/appicon.ico"
         COMMENT "Deploying tray icon"
+    )
+
+    # 全新安装时 ApiSiteModel 从 exe 同目录导入这份站点清单 (加密分享串)。
+    # 源文件缺失会让这条拷贝失败，构建当场报错，避免出包时漏带站点清单。
+    add_custom_command(TARGET MeloBox POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/vod.txt"
+            "$<TARGET_FILE_DIR:MeloBox>/vod.txt"
+        COMMENT "Deploying bundled site list"
     )
 endif()
 
@@ -173,11 +151,10 @@ qt_add_qml_module(MeloBox
         ui/qml/components/SiteManagementView.qml
         ui/qml/components/VideoDetailPanel.qml
         ui/qml/components/DownloadView.qml
-        ui/qml/components/MusicView.qml
+        ui/qml/components/UpdateView.qml
         ui/qml/components/HistoryView.qml
         ui/qml/components/MemeView.qml
         ui/qml/components/VoiceView.qml
-        ui/qml/components/HotNewsView.qml
         ui/qml/components/ImageView.qml
         ui/qml/components/ShortVideoView.qml
         ui/qml/components/ShortVideoOverlay.qml
@@ -185,10 +162,11 @@ qt_add_qml_module(MeloBox
         ui/qml/components/HomeView.qml
         ui/qml/components/VideoPlayerView.qml
         ui/qml/components/AnimeView.qml
-        ui/qml/components/BeeView.qml
-        ui/qml/components/BookView.qml
+        ui/qml/components/MyView.qml
         ui/qml/components/DanmakuOverlay.qml
         ui/qml/components/ApiManagerDialog.qml
+        ui/qml/components/LoginView.qml
+        ui/qml/components/UserProfileDialog.qml
         ui/qml/panels/MediaPanel.qml
         ui/qml/panels/CurrentMediaPanel.qml
         ui/qml/panels/MediaInfoPanel.qml
@@ -225,9 +203,12 @@ target_compile_definitions(MeloBox PRIVATE
     MELOBOX_UPDATE_REPO="${MELOBOX_UPDATE_REPO}"
 )
 
+# libmpv 使用通用 x86-64 构建 (概念版同款, 虚拟机实测可用)。
+# 之前用的 mpv-dev-x86_64-v3 构建需要 AVX2, 部分 CPU/虚拟机不支持,
+# libmpv 初始化即崩溃报"DLL 初始化例程失败"。
 set(MELOBOX_MPV_RUNTIME_DLL
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/extracted/libmpv-2.dll"
-    CACHE FILEPATH "Optional libmpv runtime DLL copied next to MeloBox.exe"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/libmpv-2-generic.dll"
+    CACHE FILEPATH "Optional libmpv runtime DLL copied next to MeloBox.exe" FORCE
 )
 
 set(MELOBOX_INNO_SETUP_COMPILER "" CACHE FILEPATH "Path to ISCC.exe used by the package_installer target")
@@ -294,13 +275,7 @@ if(WIN32 AND TARGET OpenSSL::Crypto)
     )
 endif()
 
-# Dmghg main-gateway responses use the bundled RSA key for decryption.
-add_custom_command(TARGET MeloBox POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/dmghg/dmghg_key.pem"
-        "$<TARGET_FILE_DIR:MeloBox>/dmghg_key.pem"
-    COMMENT "Deploying Dmghg response decryption key"
-)
+# RSA 私钥已内嵌 (DmghgSecrets 混淆), 不再随程序部署明文 pem。
 
 if(MELOBOX_ENABLE_FFMPEG)
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -440,6 +415,14 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/app/AppServices.cpp
             src/common/MediaUtils.cpp
             src/controller/PlayerController.cpp
+            src/controller/ImageController.cpp
+            src/controller/MemeController.cpp
+            src/controller/PoolMeController.cpp
+            src/controller/PoolChatController.cpp
+            src/infrastructure/PoolApi.cpp
+            src/controller/UpdateController.cpp
+            src/controller/VideoCatalogController.cpp
+            src/controller/VoiceController.cpp
             src/mpv/MpvBackend.cpp
             src/core/PlayerEngine.cpp
             src/core/MediaSession.cpp
@@ -469,16 +452,16 @@ if(MELOBOX_ENABLE_FFMPEG)
             src/models/DownloadModel.cpp
             src/models/DmghgAnimeModel.cpp
             src/media/DmghgClient.cpp
-            src/models/BeeVideoModel.cpp
-            src/models/BeeScheduleModel.cpp
-            src/media/BeeClient.cpp
-            src/book/BookSource.cpp
-            src/book/HtmlDom.cpp
-            src/book/RuleEngine.cpp
-            src/book/LegadoClient.cpp
-            src/models/LegadoSourceModel.cpp
-            src/models/LegadoBookModel.cpp
+            src/media/DmghgSecrets.cpp
+            src/dmghgv3/MagicCrypto.cpp
+            src/dmghgv3/DmghgClientV3.cpp
+            src/controller/AuthController.cpp
             src/infrastructure/Logger.cpp
+        )
+
+        target_compile_definitions(miniPlayerCoreTests PRIVATE
+            MELOBOX_UPDATE_OWNER="${MELOBOX_UPDATE_OWNER}"
+            MELOBOX_UPDATE_REPO="${MELOBOX_UPDATE_REPO}"
         )
 
         target_include_directories(miniPlayerCoreTests PRIVATE
@@ -500,6 +483,22 @@ if(MELOBOX_ENABLE_FFMPEG)
         )
 
         add_test(NAME miniPlayerCoreTests COMMAND $<TARGET_FILE:miniPlayerCoreTests>)
+
+        add_executable(miniPlayerMagicTests
+            src/dmghgv3/MagicCryptoSelfTest.cpp
+            src/dmghgv3/MagicCrypto.cpp
+        )
+
+        target_include_directories(miniPlayerMagicTests PRIVATE
+            src
+        )
+
+        target_link_libraries(miniPlayerMagicTests PRIVATE
+            Qt6::Core
+            OpenSSL::Crypto
+        )
+
+        add_test(NAME miniPlayerMagicTests COMMAND $<TARGET_FILE:miniPlayerMagicTests>)
 
         add_executable(miniPlayerPipelineTests
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/media/PrimitivesTests.cpp
@@ -729,8 +728,8 @@ if (MSVC AND MELOBOX_ENABLE_RUNTIME_DEPLOYMENT)
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/multimedia"
 
                 # Remove optional plugins windeployqt may have copied but the app
-                # does not use. Keep qjpeg/qgif and both TLS backends; BeeWeb
-                # requires OpenSSL for its TLS renegotiation behavior.
+                # does not use. Keep qjpeg/qgif and both TLS backends; HTTPS
+                # sites (update check, image APIs) need the TLS backends.
                 COMMAND ${CMAKE_COMMAND} -E rm -rf
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/generic"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/iconengines"
@@ -802,14 +801,9 @@ if (MSVC AND MELOBOX_ENABLE_RUNTIME_DEPLOYMENT)
                 "${_miniPlayerQtBinDir}/Qt6QuickControls2Impl$<$<CONFIG:Debug>:d>.dll"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 
-                # MSVC runtime side-by-side DLLs required by the vcpkg Qt build.
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$ENV{SystemRoot}/System32/msvcp140_1.dll"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/MSVCP140_1.dll"
-
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$ENV{SystemRoot}/System32/msvcp140_2.dll"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/MSVCP140_2.dll"
+                # msvcp140/_1/_2/vcruntime140(_1)/concrt140 全部由
+                # cmake/DeployRuntime.cmake 从同一个 VS Redist 目录取，版本自洽；
+                # 这里不再从 System32 拷 _1/_2 —— 那会和 Redist 版混成两套 CRT。
 
                 # Keep Qt's plugin lookup self-contained when the application is
                 # launched from an installed directory with a different Qt setup.

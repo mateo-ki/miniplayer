@@ -18,10 +18,18 @@ Item {
     property int imagePrefetchPending: 0
     readonly property int imagePoolTargetSize: 8
     readonly property int imagePrefetchConcurrency: 4
+    property var recentImageUrls: []
+    readonly property int recentImageUrlsMax: 60
     ListModel { id: imageSiteList }
     ListModel { id: imagePrefetchPool }
     onRefreshModeChanged: root.saveUiSettingRequested("imageRefreshMode", refreshMode)
     onAutoRefreshMsChanged: root.saveUiSettingRequested("imageAutoRefreshMs", autoRefreshMs)
+    onActiveChanged: {
+        if (active) {
+            root.ensureInitialImage()
+            root.refillImagePrefetchPool()
+        }
+    }
 
     function rebuildImageSites() {
         imageSiteList.clear()
@@ -90,14 +98,54 @@ Item {
         imagePrefetchPool.clear()
         imagePrefetchPending = 0
     }
+
+    function isRepeatImageUrl(imageUrl) {
+        if (!imageUrl || imageUrl.length === 0)
+            return true
+        if (imageUrl === services.imageController.currentImageDisplayUrl)
+            return true
+        if (recentImageUrls.indexOf(imageUrl) >= 0)
+            return true
+        for (var i = 0; i < imagePrefetchPool.count; ++i) {
+            if (imagePrefetchPool.get(i).imageUrl === imageUrl)
+                return true
+        }
+        return false
+    }
+
+    function rememberImageUrl(imageUrl) {
+        if (!imageUrl || imageUrl.length === 0)
+            return
+        var existing = recentImageUrls.indexOf(imageUrl)
+        if (existing === 0)
+            return
+        if (existing > 0)
+            recentImageUrls.splice(existing, 1)
+        recentImageUrls.unshift(imageUrl)
+        if (recentImageUrls.length > recentImageUrlsMax)
+            recentImageUrls.length = recentImageUrlsMax
+    }
+
     function consumePrefetchedImage(apiUrl) {
+        // 优先匹配当前接口的预载项
         for (var i = 0; i < imagePrefetchPool.count; ++i) {
             var item = imagePrefetchPool.get(i)
             if (item.apiUrl !== apiUrl)
                 continue
             var imageUrl = item.imageUrl
             imagePrefetchPool.remove(i)
+            root.rememberImageUrl(imageUrl)
             services.imageController.showPrefetchedImage(imageUrl)
+            Qt.callLater(root.refillImagePrefetchPool)
+            return true
+        }
+        // 如果当前源没有预载项，但预载池里有其他源预载好的图片（例如切源刷新模式），直接复用
+        if (imagePrefetchPool.count > 0) {
+            var fallbackItem = imagePrefetchPool.get(0)
+            var fallbackUrl = fallbackItem.imageUrl
+            imagePrefetchPool.remove(0)
+            root.rememberImageUrl(fallbackUrl)
+            services.imageController.showPrefetchedImage(fallbackUrl)
             Qt.callLater(root.refillImagePrefetchPool)
             return true
         }
@@ -105,8 +153,6 @@ Item {
     }
 
     function refillImagePrefetchPool() {
-        if (services.imageController.imageLoading)
-            return
         var apiUrl = root.currentImageApiUrl()
         if (!apiUrl || apiUrl.length === 0)
             return
@@ -127,7 +173,6 @@ Item {
             services.apiSiteModel.selectAt(imageSiteList.get(nextCombo).sourceIndex)
             imageSiteMenu.currentIndex = nextCombo
             root.saveSelectedImageSite(nextCombo)
-            root.resetImagePrefetchPool()
         }
         initialImageRequested = true
         var apiUrl = root.currentImageApiUrl()
@@ -281,7 +326,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: "\uE72C"
                                     color: "#ffffff"
-                                    font.family: "Segoe Fluent Icons"
+                                    font.family: root.theme ? root.theme.iconFontFamily : "Segoe Fluent Icons, Segoe MDL2 Assets"
                                     font.pixelSize: 15
                                 }
 
@@ -322,7 +367,7 @@ Item {
                                     contentItem: Text {
                                         text: "\uE8C8"
                                         color: root.theme.textSecondaryColor
-                                        font.family: "Segoe Fluent Icons"
+                                        font.family: root.theme ? root.theme.iconFontFamily : "Segoe Fluent Icons, Segoe MDL2 Assets"
                                         font.pixelSize: 16
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
@@ -346,7 +391,7 @@ Item {
                                     contentItem: Text {
                                         text: "\uE896"
                                         color: root.theme.textSecondaryColor
-                                        font.family: "Segoe Fluent Icons"
+                                        font.family: root.theme ? root.theme.iconFontFamily : "Segoe Fluent Icons, Segoe MDL2 Assets"
                                         font.pixelSize: 16
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
@@ -370,7 +415,7 @@ Item {
                                         text: "\uE713"
                                         color: imageSettingsPopup.opened
                                             ? root.theme.accentColor : root.theme.textSecondaryColor
-                                        font.family: "Segoe Fluent Icons"
+                                        font.family: root.theme ? root.theme.iconFontFamily : "Segoe Fluent Icons, Segoe MDL2 Assets"
                                         font.pixelSize: 16
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
@@ -438,7 +483,7 @@ Item {
                                 contentItem: Text {
                                     text: "\uE711"
                                     color: root.theme.textSecondaryColor
-                                    font.family: "Segoe Fluent Icons"
+                                    font.family: root.theme ? root.theme.iconFontFamily : "Segoe Fluent Icons, Segoe MDL2 Assets"
                                     font.pixelSize: 13
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
@@ -580,8 +625,8 @@ Item {
 
                                     Text {
                                         text: "内存预载 " + imagePrefetchPool.count + "/" + root.imagePoolTargetSize
-                                            + " · 磁盘缓存图片 " + services.imageController.imageDiskCacheCount
-                                            + " 张 · " + Math.round(services.imageController.imageDiskCacheBytes / 1048576) + " MB"
+                                            + " · 内存缓存图片 " + services.imageController.imageDiskCacheCount
+                                            + " 张 · " + (services.imageController.imageDiskCacheBytes / 1048576).toFixed(1) + " MB"
                                         color: root.theme.textMutedColor
                                         font.family: root.theme.fontFamily
                                         font.pixelSize: root.theme.captionSize
@@ -735,7 +780,9 @@ Item {
                 anchors.right: parent.right
                 anchors.topMargin: 8
                 anchors.rightMargin: 8
-                text: "✕"
+                text: "\uE711"
+                font.family: root.theme.iconFontFamily
+                font.pixelSize: 12
                 width: 36
                 height: 36
                 flat: false
@@ -753,23 +800,27 @@ Item {
     }
 
     Connections {
-        target: root.controller
+        target: services.imageController
         function onImagePrefetched(apiUrl, imageUrl) {
-            if (apiUrl !== root.currentImageApiUrl())
-                return
-
             root.imagePrefetchPending = Math.max(0, root.imagePrefetchPending - 1)
-            if (imageUrl && imageUrl.length > 0) {
+            if (imageUrl && imageUrl.length > 0 && !root.isRepeatImageUrl(imageUrl)) {
                 imagePrefetchPool.append({
                     "apiUrl": apiUrl,
                     "imageUrl": imageUrl
                 })
                 Qt.callLater(root.refillImagePrefetchPool)
             } else {
+                // 接口偶发返回同一张图（或与当前/最近展示过的重复），
+                // 丢弃并稍后重拉，避免用户连续刷到重复图。
                 imagePrefetchRetryTimer.restart()
             }
         }
         function onImageStateChanged() {
+            // 无论图片走预载池、网络直连还是缓存兜底路径，展示后都记入
+            // 最近列表，保证"换一张"的去重覆盖所有来源。
+            if (!services.imageController.imageLoading
+                    && services.imageController.currentImageDisplayUrl.length > 0)
+                root.rememberImageUrl(services.imageController.currentImageDisplayUrl)
             if (!services.imageController.imageLoading)
                 Qt.callLater(root.refillImagePrefetchPool)
         }

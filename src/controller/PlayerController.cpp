@@ -1,10 +1,11 @@
 #include "controller/PlayerController.h"
 
 #include "app/AppServices.h"
+#include "infrastructure/PoolApi.h"
 
 #include "common/MediaUtils.h"
-#include "controllers/VoiceController.h"
-#include "controllers/UpdateController.h"
+#include "controller/VoiceController.h"
+#include "controller/UpdateController.h"
 
 #include <QFileDialog>
 #include <QCoreApplication>
@@ -42,6 +43,12 @@
 #include <QVideoSink>
 #include <QWindow>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -65,6 +72,9 @@
 #endif
 
 namespace {
+// 片头/片尾跳过秒数上限: 20 分钟, 防止误输入把整集吃掉。
+constexpr int kSkipMarkerMaxMs = 20 * 60 * 1000;
+
 QImage imageFromBytes(const QByteArray &bytes) {
     QBuffer inputBuffer;
     inputBuffer.setData(bytes);
@@ -139,9 +149,6 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
     cursorResetTimer_ = new QTimer(this);
     cursorResetTimer_->setSingleShot(true);
     cursorResetTimer_->setInterval(800);
-    firstFrameTimer_ = new QTimer(this);
-    firstFrameTimer_->setSingleShot(true);
-    firstFrameTimer_->setInterval(10000);
     hlsPlaylistProxy_ = new HlsPlaylistProxy(this);
     qtPlayer_->setAudioOutput(qtAudioOutput_);
     qtPlayer_->setVideoSink(qtVideoSink_);
@@ -190,10 +197,6 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
         if (QGuiApplication::overrideCursor())
             QGuiApplication::restoreOverrideCursor();
     });
-    connect(firstFrameTimer_, &QTimer::timeout, this, [this]() {
-        if (mpvMode_ && positionMs_ <= 0)
-            suggestSourceSwitch(QStringLiteral("首帧加载超过 10 秒"));
-    });
     connect(&mpvBackend_, &MpvBackend::positionChanged, this, [this](qint64 position) {
         if (!mpvMode_) return;
         if (pendingSeekMs_ >= 0) {
@@ -209,8 +212,6 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
         }
         positionMs_ = position;
         applyPendingSuspendedVideoState();
-        if (position > 0)
-            markPlaybackProgress();
         emit timelineChanged();
     });
     connect(&mpvBackend_, &MpvBackend::durationChanged, this, [this](qint64 duration) {
@@ -251,7 +252,6 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
             .arg(isPlaying_));
         setLoading(false);
         mpvBuffering_ = false;
-        if (firstFrameTimer_) firstFrameTimer_->stop();
         userPausedPlayback_ = false;
         mpvPlaybackFinished_ = true;
         isPlaying_ = false;
@@ -269,14 +269,12 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
        if (mpvMode_) {
             setLoading(false);
             mpvBuffering_ = false;
-            if (firstFrameTimer_) firstFrameTimer_->stop();
             mpvPlaybackFinished_ = true;
             isPlaying_ = false;
             isPaused_ = false;
             updateMpvVideoWindowVisibility();
             emit playbackStateChanged();
        }
-        suggestSourceSwitch(QStringLiteral("当前线路播放失败：%1").arg(message));
         if (shortVideoFailed)
             emit playbackFailed(message);
    });
@@ -295,22 +293,30 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
     });
     services_->videoCatalog()->setCurrentVodName(currentVodName_);
 
-    // 书源（Legado 阅读规则）：选中源变化时重建书籍模型；音频章节交给播放器
-    connect(services_->legadoSourceModel(), &LegadoSourceModel::activeSourceChanged, this, [this]() {
-        services_->legadoBookModel()->applyActiveSource();
-    });
-    connect(services_->legadoBookModel(), &LegadoBookModel::playbackRequested, this,
-        [this](const QString &url, const QString &title) {
-            setCurrentVodName(title);
-            playVodUrl(url);
-        });
-    if (services_->legadoSourceModel()->hasSelected())
-        services_->legadoBookModel()->applyActiveSource();
-
     wireEngineSignals();
+    connect(&playlistModel_, &PlaylistModel::countChanged, this, [this]() {
+        emit currentIndexChanged();
+    });
+    connect(this, &PlayerController::repeatModeChanged, this, [this]() {
+        emit currentIndexChanged();
+    });
     loadSettings();
+    // 片头/片尾跳过只挂这一处: 自研引擎、mpv、QMediaPlayer 三条时间线通道
+    // 都发 timelineChanged，挂在这里就都覆盖到，不用每个通道各写一遍。
+    connect(this, &PlayerController::timelineChanged, this, &PlayerController::applySkipMarkers);
     QTimer::singleShot(0, this, [this]() {
         services_->videoCatalog()->loadVideoList(1);
+    });
+    // 启动即探测 mpv 可用性: libmpv 起不来 (通常 VC++ 运行库缺失) 时立即弹
+    // 安装提示, 不等用户点播放才发现。装好后无需重启, 每次播放都会重新加载。
+    QTimer::singleShot(2500, this, [this]() {
+        if (!mpvBackend_.ensureAvailable()) {
+            Logger::instance().warn(QStringLiteral(
+                "[VcRuntime] mpv unavailable at startup, prompting install"));
+            notifyVcRuntimeMissing();
+        } else {
+            Logger::instance().info(QStringLiteral("[VcRuntime] mpv backend available"));
+        }
     });
     Logger::instance().info("PlayerController initialized");
 }
@@ -372,9 +378,6 @@ PlaylistModel *PlayerController::playlistModel() { return &playlistModel_; }
 PlaylistModel *PlayerController::historyModel() { return &historyModel_; }
 RuntimeLogModel *PlayerController::runtimeLogModel() { return &runtimeLogModel_; }
 QString PlayerController::currentVodName() const { return currentVodName_; }
-bool PlayerController::sourceSwitchSuggested() const { return sourceSwitchSuggested_; }
-QString PlayerController::sourceSwitchReason() const { return sourceSwitchReason_; }
-QString PlayerController::sourceSwitchCandidate() const { return sourceSwitchCandidate_; }
 QString PlayerController::currentShortVideoUrl() const { return currentShortVideoUrl_; }
 QString PlayerController::shortVideoMessage() const { return shortVideoMessage_; }
 bool PlayerController::musicLoading() const { return musicLoading_; }
@@ -407,71 +410,20 @@ void PlayerController::openFile() {
 }
 
 void PlayerController::openFileAtPath(const QString &path, bool autoPlay) {
+    Q_UNUSED(autoPlay);
     if (opening_) return;
     opening_ = true;
-    setLoading(true);
 
-    // If same file is already open, just seek to beginning
-    if (engine_.isOpen() && currentFile_ == path) {
-        playlistModel_.clear();
-        playlistModel_.addFile(path);
-        currentIndex_ = 0;
-        recordPlaybackHistory(path, playlistModel_.titleAt(currentIndex_));
-        saveSettings();
-        emit currentIndexChanged();
-        opening_ = false;
-        setLoading(false);
-        return;
-    }
-
-    // Reset timeline immediately
-    positionMs_ = 0;
-    durationMs_ = 0;
-    emit timelineChanged();
-
-    // Phase 1: abort old pipeline (non-blocking)
-    engine_.abortPipeline();
-
-    // Phase 2: poll until old threads exit, then open new file
-    auto *timer = new QTimer(this);
-    timer->setInterval(16); // ~60fps polling
-    connect(timer, &QTimer::timeout, this, [this, timer, path, autoPlay]() {
-        if (engine_.areThreadsBusy()) {
-            return; // still waiting for old threads
-        }
-        timer->stop();
-        timer->deleteLater();
-
-        // Old threads are done, now open new file
-        engine_.finalizeStop();
-        auto result = engine_.openFile(path);
-        if (!result.ok) {
-            Logger::instance().error("Failed to open: " + result.message);
-            opening_ = false;
-            setLoading(false);
-            return;
-        }
-
-        currentFile_ = path;
-        durationMs_ = static_cast<qint64>(engine_.durationSec() * 1000);
-        mediaInfoModel_.replaceAll(engine_.mediaInfoModel()->items());
-        playlistModel_.clear();
-        playlistModel_.addFile(path);
-        currentIndex_ = 0;
-        recordPlaybackHistory(path, playlistModel_.titleAt(currentIndex_));
-        saveSettings();
-        emit currentFileChanged();
-        emit currentIndexChanged();
-        emit timelineChanged();
-        Logger::instance().info("File opened: " + path);
-        opening_ = false;
-        setLoading(false);
-
-        if (autoPlay) {
-            play();
-        }
-    });
-    timer->start();
+    // 本地文件同样只走 mpv: 自研 FFmpeg 回退管线已移除 (见 playVideoInput)。
+    playlistModel_.clear();
+    playlistModel_.addFile(path);
+    currentIndex_ = 0;
+    currentFile_ = path;
+    recordPlaybackHistory(path, playlistModel_.titleAt(0));
+    saveSettings();
+    emit currentIndexChanged();
+    opening_ = false;
+    playVideoUrl(path);
 }
 
 void PlayerController::openUrl(const QString &url) {
@@ -497,7 +449,7 @@ void PlayerController::playFromPlaylist(int index) {
     if (!playbackSources_.isEmpty())
         currentPlaybackEpisode_ = index;
 
-    // 动漫共和国的集数地址需要异步解析，列表模型先保存占位地址；
+    // ***的集数地址需要异步解析，列表模型先保存占位地址；
     // 由 QML 接到信号后调用动漫模型解析真实播放地址。
     if (path.startsWith(QStringLiteral("dmghg://"))) {
         emit playlistEpisodeRequested(index, playlistModel_.titleAt(index));
@@ -511,7 +463,8 @@ void PlayerController::playFromPlaylist(int index) {
     }
 
     const QString lower = path.toLower();
-    if (lower.startsWith(QStringLiteral("http://")) || lower.startsWith(QStringLiteral("https://"))) {
+    if (lower.startsWith(QStringLiteral("http://")) || lower.startsWith(QStringLiteral("https://"))
+        || !QFileInfo::exists(path)) {
         playVodUrl(path);
     } else {
         openFileAtPath(path, true);
@@ -529,7 +482,8 @@ void PlayerController::playFromHistory(int index) {
     emit currentIndexChanged();
 
     const QString lower = path.toLower();
-    if (lower.startsWith(QStringLiteral("http://")) || lower.startsWith(QStringLiteral("https://"))) {
+    if (lower.startsWith(QStringLiteral("http://")) || lower.startsWith(QStringLiteral("https://"))
+        || !QFileInfo::exists(path)) {
         playVodUrl(path);
     } else {
         openFileAtPath(path, true);
@@ -606,6 +560,23 @@ void PlayerController::pause() {
     emit playbackStateChanged();
 }
 
+void PlayerController::prepareExit() {
+    cancelHlsFilterRequest();
+    removeSanitizedHlsPlaylist();
+    if (hlsPlaylistProxy_)
+        hlsPlaylistProxy_->stop();
+    // 新的播放目标与当前弹幕 token 无关联时清空（dongpian 拉取会在 resolve 后重设）
+    if (mpvMode_)
+        mpvBackend_.stop();
+    if (qtPlayer_) {
+        qtPlayer_->stop();
+        qtPlayer_->setSource({});
+    }
+    engine_.shutdownFast();
+    saveSettings();
+    Logger::instance().info("Exit: playback shut down (fast path)");
+}
+
 void PlayerController::stop() {
     cancelHlsFilterRequest();
     removeSanitizedHlsPlaylist();
@@ -613,7 +584,6 @@ void PlayerController::stop() {
     if (hlsPlaylistProxy_)
         hlsPlaylistProxy_->stop();
     mpvBuffering_ = false;
-    if (firstFrameTimer_) firstFrameTimer_->stop();
     if (mpvMode_) {
         mpvBackend_.stop();
         mpvMode_ = false;
@@ -713,6 +683,70 @@ void PlayerController::setRepeatMode(RepeatMode mode) {
     emit repeatModeChanged();
 }
 
+int PlayerController::skipIntroMs() const {
+    return skipIntroMs_;
+}
+
+int PlayerController::skipOutroMs() const {
+    return skipOutroMs_;
+}
+
+void PlayerController::setSkipIntroMs(int ms) {
+    const int bounded = qBound(0, ms, kSkipMarkerMaxMs);
+    if (skipIntroMs_ == bounded) return;
+    skipIntroMs_ = bounded;
+    Logger::instance().info("跳过片头改为 " + QString::number(bounded) + "ms");
+    saveSettings();
+    emit skipMarkersChanged();
+}
+
+void PlayerController::setSkipOutroMs(int ms) {
+    const int bounded = qBound(0, ms, kSkipMarkerMaxMs);
+    if (skipOutroMs_ == bounded) return;
+    skipOutroMs_ = bounded;
+    Logger::instance().info("跳过片尾改为 " + QString::number(bounded) + "ms");
+    saveSettings();
+    emit skipMarkersChanged();
+}
+
+PlayerController::SkipAction PlayerController::skipAction(qint64 positionMs, qint64 durationMs,
+                                                         int introMs, int outroMs,
+                                                         bool introDone, bool outroDone) {
+    if (durationMs <= 0)
+        return SkipAction::None;
+    // 片头设在不到时长一半处: 小视频/预览片不该被推进后半段。
+    if (introMs > 0 && !introDone && positionMs < introMs && introMs * 2 < durationMs)
+        return SkipAction::JumpIntro;
+    if (outroMs > 0 && !outroDone && positionMs >= durationMs - outroMs)
+        return SkipAction::FinishEpisode;
+    return SkipAction::None;
+}
+
+void PlayerController::applySkipMarkers() {
+    if (!currentShortVideoUrl_.isEmpty() || !currentMusicUrl_.isEmpty())
+        return;
+    if (skipIntroMs_ <= 0 && skipOutroMs_ <= 0)
+        return;
+    if (seeking_ || pendingSeekMs_ >= 0) // 用户正在拖进度条, 不抢
+        return;
+
+    switch (skipAction(positionMs_, durationMs_, skipIntroMs_, skipOutroMs_,
+                       skipIntroDone_, skipOutroDone_)) {
+    case SkipAction::None:
+        break;
+    case SkipAction::JumpIntro:
+        skipIntroDone_ = true;
+        Logger::instance().info(QStringLiteral("跳过片头: %1 -> %2ms").arg(positionMs_).arg(skipIntroMs_));
+        seek(skipIntroMs_);
+        break;
+    case SkipAction::FinishEpisode:
+        skipOutroDone_ = true;
+        Logger::instance().info(QStringLiteral("跳过片尾: pos=%1 duration=%2ms").arg(positionMs_).arg(durationMs_));
+        handleEof();
+        break;
+    }
+}
+
 void PlayerController::switchAudioTrack(int streamIndex) {
     auto result = engine_.switchAudioTrack(streamIndex);
     if (!result.ok) {
@@ -782,7 +816,12 @@ void PlayerController::playNext() {
     int count = playlistModel_.count();
     if (count == 0) return;
     int next = currentIndex_ + 1;
-    if (next >= count) next = 0;
+    if (next >= count) {
+        if (repeatMode_ == RepeatAll)
+            next = 0;
+        else
+            return;
+    }
     playFromPlaylist(next);
 }
 
@@ -790,8 +829,54 @@ void PlayerController::playPrevious() {
     int count = playlistModel_.count();
     if (count == 0) return;
     int prev = currentIndex_ - 1;
-    if (prev < 0) prev = count - 1;
+    if (prev < 0) {
+        if (repeatMode_ == RepeatAll)
+            prev = count - 1;
+        else
+            return;
+    }
     playFromPlaylist(prev);
+}
+
+bool PlayerController::canPlayPrevious() const {
+    const int count = playlistModel_.count();
+    if (count <= 1) return false;
+    return currentIndex_ > 0 || repeatMode_ == RepeatAll;
+}
+
+bool PlayerController::canPlayNext() const {
+    const int count = playlistModel_.count();
+    if (count <= 1) return false;
+    return (currentIndex_ >= 0 && currentIndex_ + 1 < count) || repeatMode_ == RepeatAll;
+}
+
+QString PlayerController::previousEpisodeTitle() const {
+    const int count = playlistModel_.count();
+    if (count <= 1) return {};
+    int prev = currentIndex_ - 1;
+    if (prev < 0) {
+        if (repeatMode_ == RepeatAll) prev = count - 1;
+        else return {};
+    }
+    return playlistModel_.titleAt(prev);
+}
+
+QString PlayerController::nextEpisodeTitle() const {
+    const int count = playlistModel_.count();
+    if (count <= 1) return {};
+    int next = currentIndex_ + 1;
+    if (next >= count) {
+        if (repeatMode_ == RepeatAll) next = 0;
+        else return {};
+    }
+    return playlistModel_.titleAt(next);
+}
+
+QString PlayerController::currentEpisodeTitle() const {
+    if (currentIndex_ >= 0 && currentIndex_ < playlistModel_.count()) {
+        return playlistModel_.titleAt(currentIndex_);
+    }
+    return {};
 }
 
 void PlayerController::setVideoBridge(QObject *bridge) {
@@ -830,6 +915,18 @@ void PlayerController::setMpvVideoGeometry(qreal x, qreal y, qreal width, qreal 
     const int boundedWidth = qMax(1, qRound(width));
     const int boundedHeight = qMax(1, qRound(height));
     mpvVideoWindow_->setGeometry(qRound(x), qRound(y), boundedWidth, boundedHeight);
+    // 子窗口实际拿到多少物理像素：dpr=1 而屏幕在缩放的画面上，等于 mpv 画完还要被 Windows 拉伸，
+    // 这条和 mpv 的"源→输出"合起来才能判断糊该算在谁头上。尺寸变了才写一行，不跟着鼠标刷屏。
+    const double dpr = mpvVideoWindow_->devicePixelRatio();
+    const QString stamp = QStringLiteral("%1x%2 dpr=%3").arg(boundedWidth).arg(boundedHeight)
+        .arg(dpr, 0, 'f', 2);
+    if (stamp != mpvGeometryStamp_) {
+        mpvGeometryStamp_ = stamp;
+        Logger::instance().info(QStringLiteral("[Video] mpv 子窗口 %1 → 物理 %2x%3")
+            .arg(stamp)
+            .arg(qRound(boundedWidth * dpr))
+            .arg(qRound(boundedHeight * dpr)));
+    }
     updateMpvVideoWindowVisibility();
 }
 
@@ -870,113 +967,6 @@ void PlayerController::setPlaybackSources(const QVariantList &sources, int curre
         ? -1
         : qBound(0, currentSource, sources.size() - 1);
     currentPlaybackEpisode_ = qMax(0, currentEpisode);
-    sourceSuggestionCooldowns_.clear();
-    clearSourceSwitchSuggestion();
-}
-
-int PlayerController::bestAlternativeSource() const {
-    int bestIndex = -1;
-    int bestScore = -1;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    for (int index = 0; index < playbackSources_.size(); ++index) {
-        if (index == currentPlaybackSource_) continue;
-        const QVariantMap source = playbackSources_.at(index).toMap();
-        const QVariantList episodes = source.value(QStringLiteral("episodes")).toList();
-        if (currentPlaybackEpisode_ < 0 || currentPlaybackEpisode_ >= episodes.size()) continue;
-        const QString url = episodes.at(currentPlaybackEpisode_).toMap()
-            .value(QStringLiteral("url")).toString().trimmed();
-        if (url.isEmpty()) continue;
-        if (sourceSuggestionCooldowns_.value(index, 0) > now) continue;
-
-        const QString lower = url.toLower();
-        int score = 80;
-        if (lower.contains(QStringLiteral(".m3u8"))) score = 400;
-        else if (lower.startsWith(QStringLiteral("https://")) && lower.contains(QStringLiteral(".mp4"))) score = 320;
-        else if (lower.startsWith(QStringLiteral("http://")) && lower.contains(QStringLiteral(".mp4"))) score = 260;
-        else if (lower.startsWith(QStringLiteral("https://"))) score = 220;
-        else if (lower.startsWith(QStringLiteral("http://"))) score = 180;
-        else if (lower.startsWith(QStringLiteral("rtsp://")) || lower.startsWith(QStringLiteral("rtmp://"))) score = 120;
-        if (score > bestScore) {
-            bestScore = score;
-            bestIndex = index;
-        }
-    }
-    return bestIndex;
-}
-
-void PlayerController::suggestSourceSwitch(const QString &reason) {
-    if (sourceSwitchSuggested_ || playbackSources_.size() < 2 || currentShortVideoUrl_ == currentFile_)
-        return;
-    const int candidate = bestAlternativeSource();
-    if (candidate < 0) return;
-    pendingPlaybackSource_ = candidate;
-    sourceSwitchReason_ = reason;
-    const QVariantMap source = playbackSources_.at(candidate).toMap();
-    sourceSwitchCandidate_ = source.value(QStringLiteral("name")).toString();
-    if (sourceSwitchCandidate_.isEmpty())
-        sourceSwitchCandidate_ = QStringLiteral("线路 %1").arg(candidate + 1);
-    sourceSwitchSuggested_ = true;
-    sourceSuggestionCooldowns_[currentPlaybackSource_] = QDateTime::currentMSecsSinceEpoch() + 10 * 60 * 1000;
-    emit sourceSwitchSuggestionChanged();
-}
-
-void PlayerController::clearSourceSwitchSuggestion() {
-    if (!sourceSwitchSuggested_ && pendingPlaybackSource_ < 0
-            && sourceSwitchReason_.isEmpty() && sourceSwitchCandidate_.isEmpty()) return;
-    sourceSwitchSuggested_ = false;
-    pendingPlaybackSource_ = -1;
-    sourceSwitchReason_.clear();
-    sourceSwitchCandidate_.clear();
-    emit sourceSwitchSuggestionChanged();
-}
-
-void PlayerController::acceptSourceSwitch() {
-    const int sourceIndex = pendingPlaybackSource_;
-    if (sourceIndex < 0 || sourceIndex >= playbackSources_.size()) {
-        clearSourceSwitchSuggestion();
-        return;
-    }
-    const QVariantMap source = playbackSources_.at(sourceIndex).toMap();
-    const QVariantList episodes = source.value(QStringLiteral("episodes")).toList();
-    if (currentPlaybackEpisode_ < 0 || currentPlaybackEpisode_ >= episodes.size()) {
-        clearSourceSwitchSuggestion();
-        return;
-    }
-
-    pendingSourceSeekMs_ = positionMs_;
-    pendingSourcePaused_ = isPaused_ || userPausedPlayback_;
-    currentPlaybackSource_ = sourceIndex;
-    playlistModel_.setItems(episodes);
-    currentIndex_ = qBound(0, currentPlaybackEpisode_, qMax(0, playlistModel_.count() - 1));
-    emit currentIndexChanged();
-    const QString url = episodes.at(currentPlaybackEpisode_).toMap()
-        .value(QStringLiteral("url")).toString();
-    clearSourceSwitchSuggestion();
-    playVodUrl(url);
-}
-
-void PlayerController::rejectSourceSwitch() {
-    if (pendingPlaybackSource_ >= 0)
-        sourceSuggestionCooldowns_[pendingPlaybackSource_] = QDateTime::currentMSecsSinceEpoch() + 10 * 60 * 1000;
-    clearSourceSwitchSuggestion();
-}
-
-void PlayerController::armFirstFrameDetection() {
-    if (firstFrameTimer_ && playbackSources_.size() > 1)
-        firstFrameTimer_->start();
-}
-
-void PlayerController::markPlaybackProgress() {
-    if (firstFrameTimer_) firstFrameTimer_->stop();
-    if (pendingSourceSeekMs_ >= 0 && durationMs_ > 0) {
-        const qint64 seekTarget = qMin(pendingSourceSeekMs_, durationMs_);
-        pendingSourceSeekMs_ = -1;
-        seek(seekTarget);
-        if (pendingSourcePaused_) {
-            pendingSourcePaused_ = false;
-            QTimer::singleShot(250, this, &PlayerController::pause);
-        }
-    }
 }
 
 void PlayerController::updateMpvVideoWindowVisibility() {
@@ -1056,6 +1046,8 @@ void PlayerController::finishSeek() {
 
 void PlayerController::loadSettings() {
     QSettings s("MeloBox", "MeloBox");
+    skipIntroMs_ = qBound(0, s.value("skip/introMs", 0).toInt(), kSkipMarkerMaxMs);
+    skipOutroMs_ = qBound(0, s.value("skip/outroMs", 0).toInt(), kSkipMarkerMaxMs);
     volume_ = qBound(0.0f, s.value("volume", 1.0f).toFloat(), 1.0f);
     if (volume_ <= 0.01f) {
         volume_ = 1.0f;
@@ -1075,6 +1067,8 @@ void PlayerController::loadSettings() {
 void PlayerController::saveSettings() {
     QSettings s("MeloBox", "MeloBox");
     s.setValue("volume", volume_);
+    s.setValue("skip/introMs", skipIntroMs_);
+    s.setValue("skip/outroMs", skipOutroMs_);
     s.setValue("history", historyModel_.toVariantList());
 
     s.remove("playlist");
@@ -1204,6 +1198,8 @@ void PlayerController::preparePlaybackTarget(const QString &displayUrl) {
     currentFile_ = displayUrl.trimmed();
     positionMs_ = 0;
     durationMs_ = 0;
+    skipIntroDone_ = false;
+    skipOutroDone_ = false;
     mpvBufferProgress_ = 0.0;
     mpvBuffering_ = false;
     setLoading(true);
@@ -1257,16 +1253,183 @@ void PlayerController::playVideoInput(const QString &inputUrl, const QString &di
             .arg(trimmedInput, currentFile_));
         mpvBackend_.load(trimmedInput);
         mpvBackend_.play();
-        armFirstFrameDetection();
         return;
     }
-    Logger::instance().warn("libmpv backend unavailable, falling back to FFmpeg pipeline: " + mpvBackend_.errorString());
+    // FFmpeg 回退管线已移除: 视频 (网络流/本地文件) 只走 mpv。libmpv 加载
+    // 失败 (通常是 VC++ 运行库缺失) 时不进入破损的回退管线, 直接报错并
+    // 引导安装运行库; 装好后下一次播放自动用上 mpv (后端每次播放重新尝试加载)。
+    Logger::instance().warn(QStringLiteral(
+        "libmpv backend unavailable, mpv-only playback: %1").arg(mpvBackend_.errorString()));
+    notifyVcRuntimeMissing();
     if (qtPlayer_) {
         qtPlayer_->stop();
         qtPlayer_->setSource({});
     }
     qtNetworkMode_ = false;
-    openFileAtPath(trimmedInput, true);
+    setLoading(false);
+    emit playbackStateChanged();
+    emit playbackFailed(QStringLiteral("播放器初始化失败: 缺少 VC++ 运行库, 请按提示安装后重试"));
+}
+
+bool PlayerController::isVcRuntimeInstalled() {
+    // 仅认微软官方注册表键。System32 里有零散 DLL 不代表运行库完整
+    // (虚拟机实测: 有 DLL 但 libmpv 仍初始化失败, DLL 探测会误判"已安装"
+    // 从而吞掉安装提示)。
+    const QSettings runtimes(
+        QStringLiteral(R"(HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64)"),
+        QSettings::NativeFormat);
+    return runtimes.value(QStringLiteral("Installed")).toInt() == 1;
+}
+
+void PlayerController::notifyVcRuntimeMissing() {
+    // mpv 加载失败即提示, 不做任何"可能已安装"的预判——
+    // 判定不可靠时宁可多提示一次。
+    if (vcRuntimePromptShown_)
+        return;
+    vcRuntimePromptShown_ = true;
+    Logger::instance().warn("libmpv load failed; prompting VC++ runtime install");
+    emit vcRuntimeMissing();
+}
+
+void PlayerController::installVcRuntime() {
+    if (vcInstallRunning_) {
+        // 已在下载/安装中: 给可见反馈而不是无声返回。
+        emit vcInstallStateChanged(QStringLiteral("正在下载/安装中, 请稍候..."));
+        return;
+    }
+    if (isVcRuntimeInstalled()) {
+        emit vcInstallStateChanged(QStringLiteral("运行库已安装但 mpv 仍无法加载, 可能缺少系统媒体组件 (如 Windows N 版需安装媒体功能包)"));
+        return;
+    }
+    vcInstallRunning_ = true;
+
+    // 多下载源依次尝试 (aka.ms 微软官方 → Gitee 仓库镜像)；
+    // 不想联网的机器用对话框里的"使用本地安装包"自选已下好的 vc_redist.x64.exe。
+    static const QStringList kVcRedistUrls = {
+        QStringLiteral("https://aka.ms/vs/17/release/vc_redist.x64.exe"),
+        QStringLiteral("https://gitee.com/mateo-ki/melo-box-app/raw/master/redist/vc_redist.x64.exe"),
+    };
+
+    auto tryDownload = std::make_shared<std::function<void(int)>>();
+    *tryDownload = [this, tryDownload](int urlIndex) {
+        if (urlIndex >= kVcRedistUrls.size()) {
+            vcInstallRunning_ = false;
+            Logger::instance().error("[VcRuntime] all download sources failed");
+            emit vcInstallStateChanged(QStringLiteral("所有下载源均失败, 可点\"使用本地安装包\"选择已下载的 vc_redist.x64.exe"));
+            return;
+        }
+        const QUrl url(kVcRedistUrls.at(urlIndex));
+        Logger::instance().info(QStringLiteral("[VcRuntime] downloading from %1").arg(url.toString()));
+        emit vcInstallStateChanged(QStringLiteral("正在下载 VC++ 运行库 (源 %1/%2)...").arg(urlIndex + 1).arg(kVcRedistUrls.size()));
+        auto *nam = new QNetworkAccessManager(this);
+        QNetworkRequest request(url);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        request.setTransferTimeout(25000);  // 25s 无数据即切下一个源
+        auto *reply = nam->get(request);
+        connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
+            if (total > 0)
+                emit vcInstallStateChanged(QStringLiteral("正在下载 VC++ 运行库... %1MB / %2MB (%3%)")
+                    .arg(received / 1048576.0, 0, 'f', 1)
+                    .arg(total / 1048576.0, 0, 'f', 1)
+                    .arg(int(received * 100 / total)));
+            else
+                emit vcInstallStateChanged(QStringLiteral("正在下载 VC++ 运行库... %1KB").arg(received / 1024));
+        });
+        connect(reply, &QNetworkReply::finished, this, [this, reply, nam, tryDownload, urlIndex]() {
+            const QByteArray bytes = reply->readAll();
+            const auto error = reply->error();
+            reply->deleteLater();
+            nam->deleteLater();
+            // 体积过小 (404 页/空响应) 与传输错误同样视为源失败。
+            if (error != QNetworkReply::NoError || bytes.size() < 1024 * 1024) {
+                Logger::instance().warn(QStringLiteral(
+                    "[VcRuntime] source failed (error=%1 bytes=%2), switching source")
+                    .arg(int(error)).arg(bytes.size()));
+                QTimer::singleShot(300, this, [tryDownload, urlIndex]() { (*tryDownload)(urlIndex + 1); });
+                return;
+            }
+            const QString downloadPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+                .filePath(QStringLiteral("vc_redist.x64.exe"));
+            QFile file(downloadPath);
+            if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
+                vcInstallRunning_ = false;
+                emit vcInstallStateChanged(QStringLiteral("安装包保存失败, 请重试"));
+                return;
+            }
+            file.close();
+            Logger::instance().info(QStringLiteral("[VcRuntime] redist downloaded to %1 (%2 bytes)")
+                .arg(downloadPath).arg(bytes.size()));
+            runVcRedistInstaller(downloadPath);
+        });
+    };
+    (*tryDownload)(0);
+}
+
+// 以管理员权限静默运行 vc_redist 并轮询注册表验证完成 (最长 5 分钟)。
+void PlayerController::runVcRedistInstaller(const QString &installerPath) {
+    vcInstallerPath_ = installerPath;
+    emit vcInstallStateChanged(QStringLiteral("正在安装, 如弹出 UAC 窗口请选择\"是\"..."));
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.lpVerb = L"runas";
+    const QString exePath = QDir::toNativeSeparators(installerPath);
+    const wchar_t *params = L"/install /quiet /norestart";
+    sei.lpFile = reinterpret_cast<const wchar_t *>(exePath.utf16());
+    sei.lpParameters = params;
+    sei.nShow = SW_HIDE;
+    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+    if (!ShellExecuteExW(&sei) || reinterpret_cast<intptr_t>(sei.hInstApp) <= 32) {
+        vcInstallRunning_ = false;
+        Logger::instance().error("[VcRuntime] elevation declined or launch failed");
+        emit vcInstallStateChanged(QStringLiteral("无法启动安装程序 (UAC 被拒绝?), 可右键以管理员身份手动运行安装包"));
+        return;
+    }
+    if (sei.hProcess)
+        CloseHandle(sei.hProcess);
+    vcInstallPollCount_ = 0;
+    disconnect(&vcInstallPollTimer_, nullptr, nullptr, nullptr);
+    connect(&vcInstallPollTimer_, &QTimer::timeout, this, [this]() {
+        if (isVcRuntimeInstalled()) {
+            vcInstallPollTimer_.stop();
+            vcInstallRunning_ = false;
+            Logger::instance().info("[VcRuntime] install verified via registry");
+            emit vcInstallStateChanged(QStringLiteral("VC++ 运行库安装完成, 下次播放将自动启用高性能播放器"));
+            return;
+        }
+        vcInstallPollCount_ += 1;
+        if (vcInstallPollCount_ > 150) {
+            vcInstallPollTimer_.stop();
+            vcInstallRunning_ = false;
+            emit vcInstallStateChanged(QStringLiteral("等待安装超时, 可重新点击\"立即安装\"或手动安装"));
+        }
+    });
+    vcInstallPollTimer_.start(2000);
+}
+
+// 离线机器的自备安装包入口: 从其他设备拷贝 vc_redist.x64.exe 过来本地安装。
+// 文件选择用 C++ 原生 QFileDialog (Win32), 不依赖任何 QML 对话框模块。
+void PlayerController::installVcRuntimeFromFile() {
+    if (vcInstallRunning_)
+        return;
+    if (isVcRuntimeInstalled()) {
+        emit vcInstallStateChanged(QStringLiteral("运行库已安装但 mpv 仍无法加载, 可能缺少系统媒体组件 (如 Windows N 版需安装媒体功能包)"));
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        nullptr, QStringLiteral("选择 VC++ 运行库安装包"),
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+        QStringLiteral("VC++ 安装包 (vc_redist*.exe);;所有文件 (*.exe)"));
+    const QString trimmed = QDir::toNativeSeparators(path.trimmed());
+    if (trimmed.isEmpty())
+        return;
+    const QFileInfo info(trimmed);
+    if (!info.exists() || info.size() < 1024 * 1024) {
+        emit vcInstallStateChanged(QStringLiteral("未找到有效的 vc_redist 安装包文件"));
+        return;
+    }
+    vcInstallRunning_ = true;
+    Logger::instance().info(QStringLiteral("[VcRuntime] installing from local file: %1").arg(trimmed));
+    runVcRedistInstaller(trimmed);
 }
 
 void PlayerController::removeSanitizedHlsPlaylist() {
@@ -1336,9 +1499,114 @@ void PlayerController::fetchAndFilterHls(const QString &url, quint64 requestSeri
     });
 }
 
+void PlayerController::clearVideoDanmaku() {
+    if (videoDanmaku_.isEmpty() && videoDanmakuToken_.isEmpty()) return;
+    videoDanmaku_.clear();
+    videoDanmakuToken_.clear();
+    emit videoDanmakuChanged();
+}
+
+/// dongpian 系影视：按分集 token 拉 Pool 弹幕（/api/movie/danmaku），转成
+/// DanmakuOverlay 兼容的 [{id,text,color,timePoint,mode,size}]
+void PlayerController::fetchVideoDanmaku(const QString &episodeToken) {
+    auto *sites = services_ ? services_->apiSiteModel() : nullptr;
+    const QString sourceId = sites ? sites->currentVideoSourceId() : QString();
+    const QString server = sites ? sites->poolServerUrl() : QString();
+    const QString sessionToken = sites ? sites->poolSessionToken() : QString();
+    // 只有 dongpian 系官方源的分集有 Pool 弹幕；token 变化才重新拉
+    if (!sourceId.startsWith(QStringLiteral("dongpian")) || server.isEmpty()
+        || sessionToken.isEmpty() || episodeToken.trimmed().isEmpty()) {
+        clearVideoDanmaku();
+        return;
+    }
+    if (videoDanmakuToken_ == episodeToken && !videoDanmaku_.isEmpty()) return;
+    videoDanmakuToken_ = episodeToken;
+    videoDanmaku_.clear();
+    emit videoDanmakuChanged();
+    const QString path = QStringLiteral("/api/movie/danmaku?token=%1")
+                             .arg(QString::fromUtf8(QUrl::toPercentEncoding(episodeToken)));
+    QPointer<PlayerController> guard(this);
+    PoolApi::sendRequest(this, poolNam_, server, path, {}, QByteArrayLiteral("GET"),
+        sessionToken, [guard, episodeToken](const PoolApi::Result &result) {
+            if (!guard) return;
+            if (!result.ok) return;
+            // 弹幕下载慢（上游 manifest+分段），响应到达时若已切到别的分集则丢弃，
+            // 否则旧集弹幕会覆盖新集 —— 出现"别的影视的弹幕"
+            if (guard->videoDanmakuToken_ != episodeToken) return;
+            const auto data = result.data.toObject();
+            if (data.value(QStringLiteral("status")).toString() != QStringLiteral("ready")) return;
+            QVariantList list;
+            int idx = 0;
+            for (const auto &v : data.value(QStringLiteral("items")).toArray()) {
+                const auto it = v.toObject();
+                QVariantMap m;
+                m.insert(QStringLiteral("id"), idx++);
+                m.insert(QStringLiteral("text"), it.value(QStringLiteral("text")).toString());
+                m.insert(QStringLiteral("color"), it.value(QStringLiteral("color")).toString(QStringLiteral("#ffffff")));
+                m.insert(QStringLiteral("timePoint"), (it.value(QStringLiteral("time")).toDouble()) * 1000.0);
+                m.insert(QStringLiteral("mode"), it.value(QStringLiteral("mode")).toInt());
+                m.insert(QStringLiteral("size"), it.value(QStringLiteral("size")).toString(QStringLiteral("M")));
+                list.append(m);
+            }
+            if (list.isEmpty()) return;
+            guard->videoDanmaku_ = list;
+            emit guard->videoDanmakuChanged();
+            Logger::instance().info(QStringLiteral("[Danmaku] video danmaku loaded: %1").arg(list.size()));
+        });
+}
+
+void PlayerController::resolvePoolPlayUrl(const QString &episodeToken) {
+    auto *sites = services_ ? services_->apiSiteModel() : nullptr;
+    const QString sourceId = sites ? sites->currentVideoSourceId() : QString();
+    const QString server = sites ? sites->poolServerUrl() : QString();
+    const QString sessionToken = sites ? sites->poolSessionToken() : QString();
+    if (sourceId.isEmpty() || server.isEmpty() || sessionToken.isEmpty()) {
+        emit playbackFailed(QStringLiteral("请先登录后再播放"));
+        return;
+    }
+    const QString path = QStringLiteral("/api/vod/play?site=%1&url=%2")
+                             .arg(sourceId,
+                                  QString::fromUtf8(QUrl::toPercentEncoding(episodeToken)));
+    PoolApi::sendRequest(this, poolNam_, server, path, {}, QByteArrayLiteral("GET"),
+                         sessionToken, [this, episodeToken](const PoolApi::Result &result) {
+            if (!result.ok) {
+                emit playbackFailed(result.message.isEmpty()
+                                        ? QStringLiteral("解析播放线路失败")
+                                        : result.message);
+                return;
+            }
+            const auto lines =
+                result.data.toObject().value(QStringLiteral("lines")).toArray();
+            QString bestUrl;
+            int bestScore = -1;
+            for (const auto &line : lines) {
+                const auto obj = line.toObject();
+                // featured 置顶（无水印/牛牛/最大），再按 priority 择优
+                const int score =
+                    (obj.value(QStringLiteral("is_featured")).toBool() ? 1000 : 0)
+                    + obj.value(QStringLiteral("priority")).toInt();
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestUrl = obj.value(QStringLiteral("url")).toString();
+                }
+            }
+            if (bestUrl.isEmpty()) {
+                emit playbackFailed(QStringLiteral("该分集暂无可用播放线路"));
+                return;
+            }
+            fetchVideoDanmaku(episodeToken);
+            playVideoUrl(bestUrl);
+        });
+}
+
 void PlayerController::playVideoUrl(const QString &url) {
     const QString trimmed = url.trimmed();
     if (trimmed.isEmpty()) return;
+    // pool 统一点播源：非直链分集标识（如短片源 token）先解析成直链再走常规路径
+    if (!trimmed.startsWith(QStringLiteral("http"))) {
+        resolvePoolPlayUrl(trimmed);
+        return;
+    }
     Logger::instance().info("Playing video URL: " + trimmed);
     Logger::instance().info(QStringLiteral("[ShortVideoDebug][C++] playVideoUrl enter url=%1 currentShortVideoUrl=%2 mpvMode=%3 loading=%4 position=%5 duration=%6")
         .arg(url, currentShortVideoUrl_)
@@ -1374,6 +1642,10 @@ void PlayerController::playVideoUrl(const QString &url) {
 void PlayerController::playVodUrl(const QString &url) {
     const QString trimmed = url.trimmed();
     if (trimmed.isEmpty()) return;
+
+    // 注意: 不要过滤 v1-ad.video.yximgs.com / adVideoLp 之类的 URL——
+    // 接口下发的正片就可能落在这些"广告"域名/路径上 (实测 23 分钟 4K HEVC
+    // 正片由此下发且可正常播放), 拦截会导致动漫/短视频"播放不了"。
 
     if (!currentShortVideoUrl_.isEmpty()) {
         currentShortVideoUrl_.clear();
@@ -1520,6 +1792,8 @@ void PlayerController::prefetchShortVideo(int sourceIndex, const QString &source
 
         if (resolved.isEmpty() && contentType.startsWith(QStringLiteral("video/"), Qt::CaseInsensitive))
             resolved = reply->url().toString();
+        // 注意: 不过滤 adVideoLp / v1-ad.video.yximgs.com 之类的 URL——
+        // 接口下发的正片就可能由此下发且可正常播放, 过滤会让内容"播放不了"。
         emit shortVideoPrefetched(sourceIndex, resolved, label);
     });
 }

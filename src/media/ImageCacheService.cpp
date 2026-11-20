@@ -3,20 +3,13 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QSaveFile>
-#include <QStandardPaths>
-
-#include <algorithm>
 #include <QRandomGenerator>
+#include <QStandardPaths>
+#include <algorithm>
 
 namespace {
-constexpr qint64 kMaxCacheBytes = 200LL * 1024 * 1024;
-constexpr qint64 kMaxAgeMs = 7LL * 24 * 60 * 60 * 1000;
+constexpr qint64 kMaxMemoryCacheBytes = 100LL * 1024 * 1024; // 100 MB 内存上限
+constexpr int kMaxMemoryEntries = 50;                       // 内存中最多保留 50 张图片
 
 bool isJpeg(const QByteArray &bytes) {
     return bytes.size() >= 3
@@ -44,23 +37,19 @@ bool isWebp(const QByteArray &bytes) {
 bool isBmp(const QByteArray &bytes) {
     return bytes.startsWith("BM");
 }
-}
+} // namespace
 
 ImageCacheService::ImageCacheService() {
-    cacheDirectory_ = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+    // 启动时清理历史版本残留的磁盘缓存文件，不占用户硬盘空间
+    cleanupLegacyDiskFiles();
+}
+
+void ImageCacheService::cleanupLegacyDiskFiles() {
+    const QString legacyDir = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
         .filePath(QStringLiteral("images"));
-    QDir().mkpath(cacheDirectory_);
-    loadIndex();
-    migrateLegacyBinFiles();
-    prune();
-}
-
-QString ImageCacheService::directory() const {
-    return cacheDirectory_;
-}
-
-QString ImageCacheService::absolutePath(const QString &fileName) const {
-    return QDir(cacheDirectory_).filePath(fileName);
+    if (QDir(legacyDir).exists()) {
+        QDir(legacyDir).removeRecursively();
+    }
 }
 
 QString ImageCacheService::extensionFromBytes(const QByteArray &bytes, const QString &mimeType) {
@@ -89,217 +78,108 @@ QString ImageCacheService::mimeFromExtension(const QString &extension) {
     return QStringLiteral("image/jpeg");
 }
 
-void ImageCacheService::loadIndex() {
-    QFile file(QDir(cacheDirectory_).filePath(QStringLiteral("index.json")));
-    if (!file.open(QIODevice::ReadOnly)) return;
-    const QJsonArray array = QJsonDocument::fromJson(file.readAll()).array();
-    for (const QJsonValue &value : array)
-        entries_.append(value.toObject().toVariantMap());
-}
-
-void ImageCacheService::saveIndex() const {
-    QJsonArray array;
-    for (const QVariant &entry : entries_)
-        array.append(QJsonObject::fromVariantMap(entry.toMap()));
-    QSaveFile file(QDir(cacheDirectory_).filePath(QStringLiteral("index.json")));
-    if (!file.open(QIODevice::WriteOnly)) return;
-    file.write(QJsonDocument(array).toJson(QJsonDocument::Compact));
-    file.commit();
-}
-
-void ImageCacheService::migrateLegacyBinFiles() {
-    bool changed = false;
-    for (int index = 0; index < entries_.size(); ++index) {
-        QVariantMap entry = entries_.at(index).toMap();
-        const QString fileName = entry.value(QStringLiteral("file")).toString();
-        if (!fileName.endsWith(QStringLiteral(".bin"), Qt::CaseInsensitive))
-            continue;
-
-        const QString oldPath = absolutePath(fileName);
-        QFile file(oldPath);
-        if (!file.open(QIODevice::ReadOnly))
-            continue;
-        const QByteArray bytes = file.readAll();
-        file.close();
-        if (bytes.isEmpty())
-            continue;
-
-        const QString extension = extensionFromBytes(bytes, entry.value(QStringLiteral("mimeType")).toString());
-        const QString newName = QFileInfo(fileName).completeBaseName() + QLatin1Char('.') + extension;
-        const QString newPath = absolutePath(newName);
-        if (oldPath != newPath) {
-            if (QFile::exists(newPath))
-                QFile::remove(oldPath);
-            else if (!QFile::rename(oldPath, newPath))
-                continue;
-        }
-        entry[QStringLiteral("file")] = newName;
-        if (entry.value(QStringLiteral("mimeType")).toString().isEmpty())
-            entry[QStringLiteral("mimeType")] = mimeFromExtension(extension);
-        entries_[index] = entry;
-        changed = true;
-    }
-
-    const QStringList leftover = QDir(cacheDirectory_).entryList(
-        QStringList{QStringLiteral("*.bin")}, QDir::Files);
-    for (const QString &binName : leftover) {
-        bool referenced = false;
-        for (const QVariant &value : entries_) {
-            if (value.toMap().value(QStringLiteral("file")).toString().compare(
-                    binName, Qt::CaseInsensitive) == 0) {
-                referenced = true;
-                break;
-            }
-        }
-        if (!referenced)
-            QFile::remove(absolutePath(binName));
-    }
-
-    if (changed)
-        saveIndex();
-}
-
 CachedImageEntry ImageCacheService::take(const QString &apiUrl) {
-    // 收集与 apiUrl 匹配且未被本会话消费的条目，随机抽一个返回，
-    // 避免"换一张"总是回灌同一张。全消费后清空标记让图片循环复用。
+    // 从内存中挑选本会话尚未消费过的缓存图片条目
     QList<int> candidates;
-    bool hasEntryForUrl = false;
-    bool allConsumed = true;
     for (int index = 0; index < entries_.size(); ++index) {
-        const QVariantMap entry = entries_.at(index).toMap();
-        if (entry.value(QStringLiteral("apiUrl")).toString() != apiUrl)
+        const auto &entry = entries_.at(index);
+        if (entry.apiUrl != apiUrl)
             continue;
-        hasEntryForUrl = true;
-        const QString key = entry.value(QStringLiteral("key")).toString();
-        if (consumedThisSession_.contains(key))
+        if (consumedThisSession_.contains(entry.key))
             continue;
-        allConsumed = false;
         candidates.append(index);
-    }
-    if (hasEntryForUrl && allConsumed) {
-        consumedThisSession_.clear();
-        // 重置后再收集一次候选（清空后全部条目都可用）。
-        candidates.clear();
-        for (int index = 0; index < entries_.size(); ++index) {
-            const QVariantMap entry = entries_.at(index).toMap();
-            if (entry.value(QStringLiteral("apiUrl")).toString() == apiUrl)
-                candidates.append(index);
-        }
     }
     if (candidates.isEmpty())
         return {};
 
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const int pickedIndex = candidates.at(
         QRandomGenerator::global()->bounded(candidates.size()));
+    auto &entry = entries_[pickedIndex];
+    consumedThisSession_.insert(entry.key);
+    entry.lastAccessMs = now;
+    return entry;
+}
 
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    QVariantMap entry = entries_.at(pickedIndex).toMap();
-    const QString key = entry.value(QStringLiteral("key")).toString();
-    const QString fileName = entry.value(QStringLiteral("file")).toString();
-    const QString path = absolutePath(fileName);
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    const QByteArray bytes = file.readAll();
-    if (bytes.isEmpty())
-        return {};
-    consumedThisSession_.insert(key);
-    entry[QStringLiteral("lastAccessMs")] = now;
-    entries_[pickedIndex] = entry;
-    saveIndex();
-    QString mime = entry.value(QStringLiteral("mimeType")).toString();
-    if (mime.isEmpty())
-        mime = mimeFromExtension(QFileInfo(fileName).suffix());
-    return {bytes, mime, entry.value(QStringLiteral("sourceUrl")).toString(), path};
+CachedImageEntry ImageCacheService::findByDisplayUrl(const QString &displayUrl) const {
+    if (displayUrl.isEmpty()) return {};
+    for (const auto &entry : entries_) {
+        if (entry.displayUrl == displayUrl)
+            return entry;
+    }
+    return {};
 }
 
 QString ImageCacheService::put(const QString &apiUrl, const QString &sourceUrl,
                                const QByteArray &bytes, const QString &mimeType) {
     if (bytes.isEmpty() || bytes.size() > 15 * 1024 * 1024) return {};
+
     const QByteArray digest = QCryptographicHash::hash(
         apiUrl.toUtf8() + '\0' + sourceUrl.toUtf8() + '\0' + bytes.left(128),
         QCryptographicHash::Sha256).toHex();
     const QString key = QString::fromLatin1(digest);
     const QString extension = extensionFromBytes(bytes, mimeType);
-    const QString fileName = key + QLatin1Char('.') + extension;
-    const QString path = absolutePath(fileName);
+    const QString effectiveMime = mimeType.isEmpty() ? mimeFromExtension(extension) : mimeType;
+    const QString displayUrl = QStringLiteral("data:%1;base64,%2").arg(
+        effectiveMime, QString::fromLatin1(bytes.toBase64()));
 
-    auto existingPathForKey = [this, &key, &path]() -> QString {
-        for (const QVariant &value : entries_) {
-            const QVariantMap entry = value.toMap();
-            if (entry.value(QStringLiteral("key")).toString() != key)
-                continue;
-            const QString existing = absolutePath(entry.value(QStringLiteral("file")).toString());
-            if (QFile::exists(existing))
-                return existing;
+    // 若本会话已消费过该 key，返回已生成的 displayUrl
+    if (consumedThisSession_.contains(key)) {
+        for (const auto &e : entries_) {
+            if (e.key == key) return e.displayUrl;
         }
-        if (QFile::exists(path))
-            return path;
-        return {};
-    };
-
-    if (consumedThisSession_.contains(key))
-        return existingPathForKey();
-
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) return {};
-    file.write(bytes);
-    if (!file.commit()) return {};
+        return displayUrl;
+    }
 
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    // 移除已有相同 key 的旧条目
     for (int index = entries_.size() - 1; index >= 0; --index) {
-        if (entries_.at(index).toMap().value(QStringLiteral("key")).toString() == key)
+        if (entries_.at(index).key == key) {
             entries_.removeAt(index);
+        }
     }
-    QVariantMap entry;
-    entry[QStringLiteral("key")] = key;
-    entry[QStringLiteral("file")] = fileName;
-    entry[QStringLiteral("apiUrl")] = apiUrl;
-    entry[QStringLiteral("sourceUrl")] = sourceUrl;
-    entry[QStringLiteral("mimeType")] = mimeType.isEmpty() ? mimeFromExtension(extension) : mimeType;
-    entry[QStringLiteral("size")] = bytes.size();
-    entry[QStringLiteral("createdMs")] = now;
-    entry[QStringLiteral("lastAccessMs")] = now;
+
+    CachedImageEntry entry;
+    entry.key = key;
+    entry.bytes = bytes;
+    entry.mimeType = effectiveMime;
+    entry.sourceUrl = sourceUrl;
+    entry.apiUrl = apiUrl;
+    entry.displayUrl = displayUrl;
+    entry.size = bytes.size();
+    entry.lastAccessMs = now;
+
     entries_.append(entry);
     prune();
-    return path;
+    return displayUrl;
 }
 
 void ImageCacheService::prune() {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    for (int index = entries_.size() - 1; index >= 0; --index) {
-        const QVariantMap entry = entries_.at(index).toMap();
-        const QString path = absolutePath(entry.value(QStringLiteral("file")).toString());
-        if (now - entry.value(QStringLiteral("createdMs")).toLongLong() > kMaxAgeMs
-                || !QFile::exists(path)) {
-            QFile::remove(path);
-            entries_.removeAt(index);
+    // 内存淘汰策略 (LRU: 超出数量或内存容量时，淘汰最久未访问的条目)
+    if (entries_.size() > kMaxMemoryEntries || sizeBytes() > kMaxMemoryCacheBytes) {
+        std::sort(entries_.begin(), entries_.end(), [](const CachedImageEntry &left, const CachedImageEntry &right) {
+            return left.lastAccessMs < right.lastAccessMs;
+        });
+        while ((entries_.size() > kMaxMemoryEntries || sizeBytes() > kMaxMemoryCacheBytes) && !entries_.isEmpty()) {
+            entries_.removeFirst();
         }
     }
-    std::sort(entries_.begin(), entries_.end(), [](const QVariant &left, const QVariant &right) {
-        return left.toMap().value(QStringLiteral("lastAccessMs")).toLongLong()
-            < right.toMap().value(QStringLiteral("lastAccessMs")).toLongLong();
-    });
-    while (sizeBytes() > kMaxCacheBytes && !entries_.isEmpty()) {
-        const QVariantMap entry = entries_.takeFirst().toMap();
-        QFile::remove(absolutePath(entry.value(QStringLiteral("file")).toString()));
-    }
-    saveIndex();
 }
 
 void ImageCacheService::clear() {
-    for (const QVariant &value : entries_)
-        QFile::remove(absolutePath(value.toMap().value(QStringLiteral("file")).toString()));
     entries_.clear();
     consumedThisSession_.clear();
-    saveIndex();
 }
 
-int ImageCacheService::count() const { return entries_.size(); }
+int ImageCacheService::count() const {
+    return entries_.size();
+}
 
 qint64 ImageCacheService::sizeBytes() const {
     qint64 total = 0;
-    for (const QVariant &value : entries_)
-        total += value.toMap().value(QStringLiteral("size")).toLongLong();
+    for (const auto &entry : entries_) {
+        total += entry.size;
+    }
     return total;
 }

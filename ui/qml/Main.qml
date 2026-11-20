@@ -41,7 +41,8 @@ ApplicationWindow {
     }
     onClosing: function(event) {
         window.forceQuit = true
-        playerController.stop()
+        // 不在这里 stop(): 管线线程等待 (最长 3s x3) 会拖慢退出,
+        // aboutToQuit 里的 prepareExit 会快速关停并保存设置。
         event.accepted = true
     }
 
@@ -97,8 +98,6 @@ ApplicationWindow {
     onDanmakuDisplayModeChanged: saveUiSetting("danmakuDisplayMode", danmakuDisplayMode)
     onDanmakuFontScaleChanged: saveUiSetting("danmakuFontScale", danmakuFontScale)
     onDanmakuEnabledChanged: saveUiSetting("danmakuEnabled", danmakuEnabled)
-    property bool beePlaybackActive: false
-    property bool bookPlaybackActive: false
     property bool playerPageActive: sidebar.currentIndex === 1 || sidebar.currentIndex === 6
     property bool videoBrowserVisible: sidebar.currentIndex === 1 && videoBrowserActive
     property bool shortVideoPlaybackActive: sidebar.currentIndex === 6
@@ -201,7 +200,7 @@ ApplicationWindow {
             shortVideoSiteList.append({
                 "sourceIndex": i,
                 "title": services.apiSiteModel.nameAt(i),
-                "subtitle": services.apiSiteModel.baseUrlAt(i)
+                "subtitle": services.apiSiteModel.sanitizeDisplay(services.apiSiteModel.baseUrlAt(i))
             })
         }
         var savedShortVideoUrl = playerController.uiSetting("selectedShortVideoSiteUrl", "")
@@ -261,7 +260,18 @@ ApplicationWindow {
         // 旧版页面 0 是首页。首页移除后，将旧设置迁移到视频页。
         if (savedPage === 0)
             savedPage = 1
-        sidebar.currentIndex = Math.max(1, Math.min(13, savedPage))
+        // 资讯(旧 8)与音乐(旧 10)已移除：旧设置正好停在这两页上的回落到视频页，
+        // 其余旧页码按新序平移 (站点 9->8、动漫 11->9、我的 12->10)。
+        if (savedPage === 8 || savedPage === 10)
+            savedPage = 1
+        else if (savedPage === 9)
+            savedPage = 8
+        else if (savedPage === 11)
+            savedPage = 9
+        else if (savedPage === 12)
+            savedPage = 10
+        // 钳制到现有最大页码 (10 = 我的)。
+        sidebar.currentIndex = Math.max(1, Math.min(10, savedPage))
         restoringUiSettings = false
 
         // 弹幕设置(与 videoFillMode 同款持久化)。
@@ -437,6 +447,22 @@ ApplicationWindow {
         playShortVideoSite(shortVideoHistory[shortVideoHistoryCursor], false)
     }
 
+    function playPreviousEpisode() {
+        if (sidebar.currentIndex === 6) {
+            playPreviousShortVideo()
+            return
+        }
+        playerController.playPrevious()
+    }
+
+    function playNextEpisode() {
+        if (sidebar.currentIndex === 6) {
+            playNextShortVideoByMode()
+            return
+        }
+        playerController.playNext()
+    }
+
     function handleShortVideoWheel(delta) {
         if (delta === 0)
             return
@@ -489,6 +515,11 @@ ApplicationWindow {
         }
         if (playlist.length > 0)
             playerController.setPlaylistEpisodes(playlist, currentIndex)
+        // 两条点集路径都经过这里，观看上报只挂这一处。
+        var animeDetail = animePage.model && animePage.model.detail ? animePage.model.detail : ({})
+        // 上报用上游真实编号：detail.vodId 在新协议下只是本次会话的句柄，重启就错位。
+        services.poolMe.reportPlay(String(animeDetail.vodIdV3 || vodId || ""),
+                                   animeDetail.vodName || "", String(currentPart || "").trim())
     }
 
     function prepareAnimePlayback(part, resolveEpisode) {
@@ -499,7 +530,7 @@ ApplicationWindow {
         window.setAnimePlaybackPlaylist(window.animePlaybackVodId, title)
         window.animeCommentsDrawerOpen = false
         window.animePlaybackActive = true
-        sidebar.activePageOverride = 11
+        sidebar.activePageOverride = 9
         sidebar.currentIndex = 1
         window.videoBrowserActive = false
         window.bottomControlReveal = false
@@ -512,6 +543,7 @@ ApplicationWindow {
     }
 
     function retryShortVideo() {
+        shortVideoFailedSourceCount = 0
         if (selectedShortVideoSiteIndex >= 0)
             playShortVideoSite(selectedShortVideoSiteIndex, false)
     }
@@ -519,6 +551,13 @@ ApplicationWindow {
     function failoverShortVideo(message) {
         shortVideoErrorMessage = message || "当前短视频源播放失败"
         shortVideoFailedSourceCount += 1
+        if (shortVideoFailedSourceCount >= 6) {
+            // 连续失败过多 (接口可能整体不可用): 停止自动切换, 保留错误
+            // 提示等用户手动重试, 避免无限失败循环刷屏。
+            shortVideoAutoAdvanceGuard = true
+            shortVideoDebug("failoverShortVideo give up after " + shortVideoFailedSourceCount + " failures")
+            return
+        }
         shortVideoAutoAdvanceGuard = true
         shortVideoFailoverTimer.restart()
     }
@@ -532,6 +571,15 @@ ApplicationWindow {
 
     Connections {
         target: playerController
+        function onPositionMsChanged() {
+            if (!window.animePlaybackActive || window.animePlaybackVodId <= 0)
+                return
+            services.dmghgAnimeModel.ensureDanmakuProgress(
+                window.animePlaybackVodId,
+                window.animeCurrentEpisode,
+                playerController.positionMs
+            )
+        }
         function onPlaylistEpisodeRequested(index, title) {
             if (!window.animePlaybackActive || !String(title || "").length)
                 return
@@ -601,7 +649,7 @@ ApplicationWindow {
             window.playNextShortVideoByMode()
         }
         function onPlaybackFailed(message) {
-            if (window.sidebar.currentIndex === 6 && window.isCurrentShortVideo())
+            if (sidebar.currentIndex === 6 && window.isCurrentShortVideo())
                 window.failoverShortVideo(message)
         }
     }
@@ -617,7 +665,7 @@ ApplicationWindow {
                 window.animeEpisodesOpen = false
                 animeEpisodesWindow.close()
                 window.animePlaybackActive = true
-                sidebar.activePageOverride = 11
+                sidebar.activePageOverride = 9
                 sidebar.currentIndex = 1
                 window.videoBrowserActive = false
                 window.bottomControlReveal = false
@@ -690,8 +738,11 @@ ApplicationWindow {
                 window.playNextShortVideoByMode()
                 return
             }
-            if (playerController.isPlaying && playerController.positionMs > 500)
+            if (playerController.isPlaying && playerController.positionMs > 500) {
                 window.shortVideoLoadRetryCount = 0
+                // 视频真正播起来了: 失败熔断计数清零。
+                window.shortVideoFailedSourceCount = 0
+            }
             if (playerController.positionMs < Math.max(0, playerController.durationMs - 900)) {
                 if (window.shortVideoAutoAdvanceGuard)
                     window.shortVideoDebug("autoTimer reset guard before end")
@@ -760,7 +811,11 @@ ApplicationWindow {
                 || floatingControlBar.seeking
                 || playerController.seeking
                 || controlBar.danmakuSettingsOpen
-                || floatingControlBar.danmakuSettingsOpen) {
+                || floatingControlBar.danmakuSettingsOpen
+                || controlBar.skipSettingsOpen
+                || floatingControlBar.skipSettingsOpen
+                || controlBar.volumeOpen
+                || floatingControlBar.volumeOpen) {
             return
         }
         playerControlHideTimer.restart()
@@ -777,7 +832,11 @@ ApplicationWindow {
                 || floatingControlBar.seeking
                 || playerController.seeking
                 || controlBar.danmakuSettingsOpen
-                || floatingControlBar.danmakuSettingsOpen) {
+                || floatingControlBar.danmakuSettingsOpen
+                || controlBar.skipSettingsOpen
+                || floatingControlBar.skipSettingsOpen
+                || controlBar.volumeOpen
+                || floatingControlBar.volumeOpen) {
             return
         }
         bottomControlReveal = false
@@ -856,26 +915,29 @@ ApplicationWindow {
         scheduleVideoSurfaceRefresh("fill-mode-toggle")
     }
 
-    Shortcut { sequence: "Space"; onActivated: window.togglePlayPause() }
+    Shortcut { sequence: "Space"; enabled: services.authController.isLoggedIn; onActivated: window.togglePlayPause() }
     Shortcut {
         sequence: "Left"
+        enabled: services.authController.isLoggedIn
         onActivated: {
             window.seekRelative(-keyboardSeekStepMs)
         }
     }
     Shortcut {
         sequence: "Right"
+        enabled: services.authController.isLoggedIn
         onActivated: {
             window.seekRelative(keyboardSeekStepMs)
         }
     }
-    Shortcut { sequence: "Up"; onActivated: window.adjustVolume(0.05) }
-    Shortcut { sequence: "Down"; onActivated: window.adjustVolume(-0.05) }
-    Shortcut { sequence: "["; onActivated: window.adjustVolume(-0.05) }
-    Shortcut { sequence: "]"; onActivated: window.adjustVolume(0.05) }
-    Shortcut { sequence: "F"; onActivated: window.toggleFullScreen() }
+    Shortcut { sequence: "Up"; enabled: services.authController.isLoggedIn; onActivated: window.adjustVolume(0.05) }
+    Shortcut { sequence: "Down"; enabled: services.authController.isLoggedIn; onActivated: window.adjustVolume(-0.05) }
+    Shortcut { sequence: "["; enabled: services.authController.isLoggedIn; onActivated: window.adjustVolume(-0.05) }
+    Shortcut { sequence: "]"; enabled: services.authController.isLoggedIn; onActivated: window.adjustVolume(0.05) }
+    Shortcut { sequence: "F"; enabled: services.authController.isLoggedIn; onActivated: window.toggleFullScreen() }
     Shortcut {
         sequence: "Escape"
+        enabled: services.authController.isLoggedIn
         onActivated: {
             if (window.visibility === Window.FullScreen) {
                 window.toggleFullScreen()
@@ -884,8 +946,38 @@ ApplicationWindow {
             }
         }
     }
-    Shortcut { sequence: "Ctrl+U"; onActivated: urlDialog.open() }
-    Shortcut { sequence: "A"; onActivated: playerController.cycleAspectRatio() }
+    Shortcut { sequence: "Ctrl+U"; enabled: services.authController.isLoggedIn; onActivated: urlDialog.open() }
+    Shortcut { sequence: "A"; enabled: services.authController.isLoggedIn; onActivated: playerController.cycleAspectRatio() }
+    Shortcut {
+        sequence: "PageUp"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playPreviousEpisode()
+    }
+    Shortcut {
+        sequence: "PageDown"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playNextEpisode()
+    }
+    Shortcut {
+        sequence: "Ctrl+Left"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playPreviousEpisode()
+    }
+    Shortcut {
+        sequence: "Ctrl+Right"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playNextEpisode()
+    }
+    Shortcut {
+        sequence: "Shift+P"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playPreviousEpisode()
+    }
+    Shortcut {
+        sequence: "Shift+N"
+        enabled: services.authController.isLoggedIn
+        onActivated: window.playNextEpisode()
+    }
 
     Timer {
         id: seekDebounceTimer
@@ -912,7 +1004,11 @@ ApplicationWindow {
                     && !floatingControlBar.seeking
                     && !playerController.seeking
                     && !controlBar.danmakuSettingsOpen
-                    && !floatingControlBar.danmakuSettingsOpen) {
+                    && !floatingControlBar.danmakuSettingsOpen
+                    && !controlBar.skipSettingsOpen
+                    && !floatingControlBar.skipSettingsOpen
+                    && !controlBar.volumeOpen
+                    && !floatingControlBar.volumeOpen) {
                 window.bottomControlReveal = false
             }
         }
@@ -967,11 +1063,7 @@ ApplicationWindow {
 
     Rectangle {
         anchors.fill: parent
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "#191919" }
-            GradientStop { position: 0.32; color: "#121212" }
-            GradientStop { position: 1.0; color: appTheme.windowColor }
-        }
+        color: appTheme.windowColor
     }
 
     RowLayout {
@@ -982,10 +1074,14 @@ ApplicationWindow {
         NavigationSidebar {
             id: sidebar
             Layout.fillHeight: true
-            // 鐢婚潰閾烘弧鍙奖鍝嶆挱鏀惧櫒鍐呭锛屼笉搴斿悶鎺夊簲鐢ㄥ鑸€?            // 宸︿晶鑿滃崟浠呭湪鐪熸鐨勭郴缁熷叏灞忕姸鎬佷笅闅愯棌銆?            Layout.preferredWidth: window.visibility === Window.FullScreen ? 0 : 64
+            // 鐢婚潰閾烘弧鍙奖鍝嶆挱鏀惧櫒鍐呭锛屼笉搴斿悶鎺夊簲鐢ㄥ鑸€?            // 宸︿晶鑿滃崟浠呭湪鐪熸鐨勭郴缁熷叏灞忕姸鎬佷笅闅愯棌銆?
+            Layout.preferredWidth: window.visibility === Window.FullScreen ? 0 : 64
             visible: window.visibility !== Window.FullScreen
             theme: appTheme
+            unreadBadge: services.poolChat ? services.poolChat.unreadTotal : 0
+            updateAvailable: services.updateController ? services.updateController.updateAvailable : false
             onCurrentIndexChanged: window.saveUiSetting("currentPage", currentIndex)
+            onLogoClicked: userProfileDialog.open()
             Component.onCompleted: window.restoreUiSettings()
         }
 
@@ -1029,8 +1125,9 @@ ApplicationWindow {
                 onBeginHoldSpeedRequested: window.beginHoldSpeed()
                 onEndHoldSpeedRequested: window.endHoldSpeed()
                 // 滚轮不再调音量，改用键盘 [ / ] 和方向键 Up/Down 调整。
-                onManageSitesRequested: sidebar.currentIndex = 9
                 onPlaybackRequested: {
+                    // 影视开播：清掉可能残留的动漫播放标记，否则动漫弹幕会盖在影视画面上
+                    window.animePlaybackActive = false
                     window.videoBrowserActive = false
                     window.bottomControlReveal = false
                 }
@@ -1052,16 +1149,15 @@ ApplicationWindow {
                 theme: appTheme
                 onNavigateRequested: function(pageIndex) { sidebar.currentIndex = pageIndex }
             }
-            // Page 3: Downloads
-            DownloadView {
-                id: downloadPage
+            // Page 3: Update
+            UpdateView {
+                id: updatePage
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.margins: appTheme.edgePadding
-                controller: playerController
+                controller: services.updateController
                 theme: appTheme
             }
-                        // Page 4: Images
+            // Page 4: Images
             ImageView {
                 id: imagePage
                 Layout.fillWidth: true
@@ -1116,35 +1212,13 @@ ApplicationWindow {
                 strings: appText
                 onSaveUiSettingRequested: function(key, value) { window.saveUiSetting(key, value) }
             }
-            // Page 8: Hot news
-            HotNewsView {
-                id: hotNewsPage
+            // Page 8（站点管理）已删除：站点由 Pool 统一下发，无需本地管理。
+            // StackLayout 按位置索引，保留空占位避免后续页面错位。
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                controller: playerController
-                theme: appTheme
-                strings: appText
-                onSaveUiSettingRequested: function(key, value) { window.saveUiSetting(key, value) }
             }
-            // Page 9: API sites
-            SiteManagementView {
-                id: sitesPage
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.margins: appTheme.edgePadding
-                controller: playerController
-                theme: appTheme
-            }
-            // Page 10: Music
-            MusicView {
-                id: musicPage
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                controller: playerController
-                theme: appTheme
-                strings: appText
-            }
-            // Page 11: Anime
+            // Page 9: Anime
             AnimeView {
                 id: animePage
                 Layout.fillWidth: true
@@ -1160,7 +1234,7 @@ ApplicationWindow {
                     window.setAnimePlaybackPlaylist(window.animePlaybackVodId, part)
                     window.animeCommentsDrawerOpen = false
                     window.animePlaybackActive = true
-                    sidebar.activePageOverride = 11
+                    sidebar.activePageOverride = 9
                     sidebar.currentIndex = 1
                     window.videoBrowserActive = false
                     window.bottomControlReveal = false
@@ -1172,37 +1246,28 @@ ApplicationWindow {
                 }
             }
 
-            // Page 12: Bee
-            BeeView {
-                id: beePage
+            MyView {
+                id: myPage
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                controller: playerController
                 theme: appTheme
-                sidebar: sidebar
-                onPlaybackRequested: {
-                    window.beePlaybackActive = true
-                    window.videoBrowserActive = false
-                    window.bottomControlReveal = false
-                    sidebar.activePageOverride = 12
-                }
-            }
-
-            // Page 13: 阅读（Legado 书源）
-            BookView {
-                id: bookPage
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                controller: playerController
-                theme: appTheme
-                sidebar: sidebar
-                onPlaybackRequested: {
-                    window.bookPlaybackActive = true
-                    window.videoBrowserActive = false
-                    window.bottomControlReveal = false
-                    sidebar.activePageOverride = 13
-                    // 听书切到播放器页展示控制条
-                    sidebar.currentIndex = 1
+                poolMe: services.poolMe
+                poolChat: services.poolChat
+                // 聊天轮询的唯一开关点在 MyView.syncPolling：这里只把「停在不在这一页」
+                // 这个条件交给它，离开第 10 页 (我的) 定时器就停。
+                pageShown: mainStack.currentIndex === 10
+                onOpenRequested: function(vodKey, name) {
+                    // 服务端存的键是上游编号，新版是 18 位数字，装不进 int，
+                    // 全程按字符串传给模型，由客户端自己换算成会话句柄。
+                    if (!vodKey)
+                        return
+                    // 侧栏按 activePage 取页，播放动漫时 activePageOverride 会被占住；
+                    // 不清零只改 currentIndex 的话，点历史条目看起来就是"没反应"。
+                    sidebar.activePageOverride = -1
+                    sidebar.currentIndex = 9
+                    animePage.selectedVodId = 0
+                    animePage.detailActive = true
+                    services.dmghgAnimeModel.loadDetailByKey(vodKey)
                 }
             }
         }
@@ -1242,7 +1307,6 @@ ApplicationWindow {
         onRebuildShortVideoSitesRequested: window.rebuildShortVideoSites()
         onShortVideoPlaybackModeRequested: function(mode) { window.shortVideoPlaybackMode = mode }
         onPlayShortVideoRequested: function(sourceIndex) { window.playShortVideoSite(sourceIndex) }
-        onManageSitesRequested: sidebar.currentIndex = 9
     }
 
     Window {
@@ -1254,7 +1318,11 @@ ApplicationWindow {
         x: window.x + (sidebar.visible ? sidebar.width : 0)
             + (window.immersiveMode ? 0 : appTheme.edgePadding)
         y: window.y + (window.immersiveMode ? 0 : appTheme.edgePadding)
-        visible: window.visible && window.playerPageActive
+        // 仅视频页(1)使用本手势窗；短视频页(6)的滚轮/滑动/点击由
+        // ShortVideoOverlay 窗口负责。此前 playerPageActive 把页 6 也算进来,
+        // 且 refreshVideoSurfaceNow 每次都会 raise 本窗, 把短视频覆盖窗压在
+        // 下面——滚轮切换等覆盖窗手势全部被这里拦死, 看似"功能丢失"。
+        visible: window.visible && sidebar.currentIndex === 1
             && !window.videoBrowserVisible && playerController.currentFile.length > 0
         flags: Qt.Tool | Qt.FramelessWindowHint
         transientParent: window
@@ -1312,10 +1380,14 @@ ApplicationWindow {
             id: animeDanmakuOverlay
             anchors.fill: parent
             z: -1
-            danmakuEnabled: window.animePlaybackActive && window.danmakuEnabled
+            // 动漫走 dmghg 模型；dongpian 系影视走 PlayerController 拉取的 Pool 弹幕
+            danmakuEnabled: (window.animePlaybackActive || playerController.videoDanmaku.length > 0)
+                && window.danmakuEnabled
                 && playerController.currentFile.length > 0
             danmakuOpacity: window.danmakuOpacity
-            danmaku: services.dmghgAnimeModel.danmaku
+            danmaku: window.animePlaybackActive
+                ? services.dmghgAnimeModel.danmaku
+                : playerController.videoDanmaku
             positionMs: playerController.positionMs
             isPlaying: playerController.isPlaying
             seeking: playerController.seeking
@@ -1330,7 +1402,7 @@ ApplicationWindow {
             x: 12
             y: 12
             z: 10
-            visible: playerPage.detailActive
+            visible: playerPage.detailActive && window.visibility !== Window.FullScreen
             radius: 6
             color: videoDetailBackMouse.containsMouse
                 ? appTheme.panelRaisedColor : appTheme.panelColor
@@ -1364,7 +1436,7 @@ ApplicationWindow {
             x: 12
             y: 12
             z: 10
-            visible: window.animePlaybackActive
+            visible: window.animePlaybackActive && window.visibility !== Window.FullScreen
             radius: 6
             color: animeDetailBackMouse.containsMouse
                 ? appTheme.panelRaisedColor : appTheme.panelColor
@@ -1395,47 +1467,7 @@ ApplicationWindow {
                     animeEpisodesWindow.close()
                     sidebar.activePageOverride = -1
                     window.videoBrowserActive = true
-                    sidebar.currentIndex = 11
-                }
-            }
-        }
-
-        Rectangle {
-            id: beeDetailBackButton
-            width: 92
-            height: 36
-            x: 12
-            y: 12
-            z: 10
-            visible: window.beePlaybackActive
-            radius: 6
-            color: beeDetailBackMouse.containsMouse
-                ? appTheme.panelRaisedColor : appTheme.panelColor
-            border.color: beeDetailBackMouse.containsMouse
-                ? appTheme.accentColor : appTheme.borderColor
-            border.width: 1
-            opacity: 0.94
-
-            Text {
-                anchors.centerIn: parent
-                text: "返回详情"
-                color: beeDetailBackMouse.containsMouse
-                    ? appTheme.accentColor : appTheme.textSecondaryColor
-                font.pixelSize: 12
-                font.family: appTheme.fontFamily
-            }
-
-            MouseArea {
-                id: beeDetailBackMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    playerController.pause()
-                    window.beePlaybackActive = false
-                    sidebar.activePageOverride = -1
-                    window.videoBrowserActive = true
-                    sidebar.currentIndex = 12
+                    sidebar.currentIndex = 9
                 }
             }
         }
@@ -1628,7 +1660,7 @@ ApplicationWindow {
                     // 音量图标随静音/有声音切换
                     text: playerController.volume <= 0 ? "\uE74F" : "\uE767"
                     color: "#ffffff"
-                    font.family: "Segoe Fluent Icons"
+                    font.family: appTheme.iconFontFamily
                     font.pixelSize: 16
                 }
 
@@ -1655,6 +1687,92 @@ ApplicationWindow {
                     font.pixelSize: 11
                 }
             }
+        }
+    }
+
+    // VC++ 运行库缺失提示: libmpv 加载失败且回退 FFmpeg 管线时弹出,
+    // 支持一键下载官方安装包并静默安装 (UAC 提权), 装完无需重启应用。
+    Dialog {
+        id: vcRuntimeDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, window.width - 48)
+        modal: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        padding: 16
+        property bool installRunning: false
+        background: Rectangle {
+            radius: appTheme.panelRadius
+            color: appTheme.panelRaisedColor
+            border.color: appTheme.borderColor
+            border.width: 1
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text {
+                Layout.fillWidth: true
+                text: "缺少 VC++ 运行库"
+                color: appTheme.textPrimaryColor
+                font.family: appTheme.fontFamily
+                font.pixelSize: appTheme.sectionTitleSize
+                font.bold: true
+            }
+            Text {
+                Layout.fillWidth: true
+                text: "未检测到 Microsoft VC++ 2015-2022 运行库，高性能播放器 (mpv) 无法加载，已回退到兼容模式播放。是否自动下载并安装官方运行库？"
+                color: appTheme.textSecondaryColor
+                font.family: appTheme.fontFamily
+                font.pixelSize: appTheme.bodySize
+                wrapMode: Text.WordWrap
+            }
+            Text {
+                id: vcInstallStatusLabel
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: ""
+                color: appTheme.accentColor
+                font.family: appTheme.fontFamily
+                font.pixelSize: appTheme.captionSize
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 8
+                Button {
+                    id: vcInstallButton
+                    text: vcRuntimeDialog.installRunning ? "安装中..." : "立即安装"
+                    enabled: !vcRuntimeDialog.installRunning
+                    onClicked: {
+                        vcRuntimeDialog.installRunning = true
+                        vcInstallStatusLabel.text = ""
+                        playerController.installVcRuntime()
+                    }
+                }
+                Button {
+                    text: "使用本地安装包"
+                    enabled: !vcRuntimeDialog.installRunning
+                    onClicked: playerController.installVcRuntimeFromFile()
+                }
+                Button {
+                    text: vcRuntimeDialog.installRunning ? "后台运行" : "稍后"
+                    onClicked: vcRuntimeDialog.close()
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: playerController
+        function onVcRuntimeMissing() {
+            if (!vcRuntimeDialog.visible)
+                vcRuntimeDialog.open()
+        }
+        function onVcInstallStateChanged(message) {
+            vcInstallStatusLabel.text = message
+            if (message.indexOf("完成") >= 0 || message.indexOf("失败") >= 0
+                    || message.indexOf("超时") >= 0 || message.indexOf("无法") >= 0
+                    || message.indexOf("已安装") >= 0)
+                vcRuntimeDialog.installRunning = false
         }
     }
 
@@ -1719,8 +1837,8 @@ ApplicationWindow {
             opacity: visible ? 1.0 : 0.0
             z: 2
             theme: appTheme
-            positionText: Qt.formatTime(new Date(Math.max(0, controlBar.seeking ? controlBar.seekTarget : (window.qtNetworkMode ? qtPlayer.position : playerController.positionMs))), "mm:ss")
-            durationText: Qt.formatTime(new Date(Math.max(0, playerController.durationMs)), "mm:ss")
+            positionText: controlBar.msToClock(controlBar.seeking ? controlBar.seekTarget : (window.qtNetworkMode ? qtPlayer.position : playerController.positionMs))
+            durationText: controlBar.msToClock(playerController.durationMs)
             progressValue: playerController.positionMs
             progressTo: Math.max(playerController.durationMs, 1)
             bufferProgress: playerController.bufferProgress
@@ -1736,11 +1854,20 @@ ApplicationWindow {
             playlistOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "playlist"
             commentsAvailable: window.animePlaybackActive
             commentsOpen: window.animeCommentsDrawerOpen
-            danmakuAvailable: window.animePlaybackActive
+            danmakuAvailable: window.animePlaybackActive || sidebar.currentIndex === 1 || playerController.videoDanmaku.length > 0
+            danmakuCount: window.animePlaybackActive
+                ? services.dmghgAnimeModel.danmaku.length
+                : playerController.videoDanmaku.length
             danmakuEnabled: window.danmakuEnabled
             danmakuOpacityValue: window.danmakuOpacity
             danmakuDisplayModeValue: window.danmakuDisplayMode
             danmakuFontScaleValue: window.danmakuFontScale
+            canPlayPrevious: playerController.canPlayPrevious
+            canPlayNext: playerController.canPlayNext
+            previousEpisodeTitle: playerController.previousEpisodeTitle
+            nextEpisodeTitle: playerController.nextEpisodeTitle
+            onPreviousRequested: window.playPreviousEpisode()
+            onNextRequested: window.playNextEpisode()
             onTogglePlayPause: window.togglePlayPause()
             onSeekRequested: function(value) { playerController.seek(value) }
             onVolumeRequested: function(value) { playerController.setVolume(value / 100.0) }
@@ -1762,10 +1889,13 @@ ApplicationWindow {
             onDanmakuFontScaleRequested: function(value) { window.danmakuFontScale = value }
             onDownloadRequested: {
                 playerController.saveCurrentPlaylistM3u8()
-                sidebar.currentIndex = 3
             }
             onPlaybackRateChangeRequested: function(rate) { playerController.setPlaybackRate(rate) }
             onRepeatModeChangeRequested: function(mode) { playerController.setRepeatMode(mode) }
+            skipIntroMs: playerController.skipIntroMs
+            skipOutroMs: playerController.skipOutroMs
+            onSkipIntroRequested: function(ms) { playerController.setSkipIntroMs(ms) }
+            onSkipOutroRequested: function(ms) { playerController.setSkipOutroMs(ms) }
             onFullScreenToggleRequested: window.toggleFullScreen()
             thumbnailImage: playerController.thumbnailPreview
             thumbnailPos: playerController.thumbnailPosition
@@ -1827,8 +1957,8 @@ ApplicationWindow {
             opacity: visible ? 1.0 : 0.0
             z: 2
             theme: appTheme
-            positionText: Qt.formatTime(new Date(Math.max(0, floatingControlBar.seeking ? floatingControlBar.seekTarget : playerController.positionMs)), "mm:ss")
-            durationText: Qt.formatTime(new Date(Math.max(0, playerController.durationMs)), "mm:ss")
+            positionText: floatingControlBar.msToClock(floatingControlBar.seeking ? floatingControlBar.seekTarget : playerController.positionMs)
+            durationText: floatingControlBar.msToClock(playerController.durationMs)
             progressValue: playerController.positionMs
             progressTo: Math.max(playerController.durationMs, 1)
             bufferProgress: playerController.bufferProgress
@@ -1844,11 +1974,20 @@ ApplicationWindow {
             playlistOpen: mediaDrawer.isOpen && mediaDrawer.drawerMode === "playlist"
             commentsAvailable: window.animePlaybackActive
             commentsOpen: window.animeCommentsDrawerOpen
-            danmakuAvailable: window.animePlaybackActive
+            danmakuAvailable: window.animePlaybackActive || sidebar.currentIndex === 1 || playerController.videoDanmaku.length > 0
+            danmakuCount: window.animePlaybackActive
+                ? services.dmghgAnimeModel.danmaku.length
+                : playerController.videoDanmaku.length
             danmakuEnabled: window.danmakuEnabled
             danmakuOpacityValue: window.danmakuOpacity
             danmakuDisplayModeValue: window.danmakuDisplayMode
             danmakuFontScaleValue: window.danmakuFontScale
+            canPlayPrevious: playerController.canPlayPrevious
+            canPlayNext: playerController.canPlayNext
+            previousEpisodeTitle: playerController.previousEpisodeTitle
+            nextEpisodeTitle: playerController.nextEpisodeTitle
+            onPreviousRequested: window.playPreviousEpisode()
+            onNextRequested: window.playNextEpisode()
             onTogglePlayPause: window.togglePlayPause()
             onSeekRequested: function(value) { playerController.seek(value) }
             onVolumeRequested: function(value) { playerController.setVolume(value / 100.0) }
@@ -1870,10 +2009,13 @@ ApplicationWindow {
             onDanmakuFontScaleRequested: function(value) { window.danmakuFontScale = value }
             onDownloadRequested: {
                 playerController.saveCurrentPlaylistM3u8()
-                sidebar.currentIndex = 3
             }
             onPlaybackRateChangeRequested: function(rate) { playerController.setPlaybackRate(rate) }
             onRepeatModeChangeRequested: function(mode) { playerController.setRepeatMode(mode) }
+            skipIntroMs: playerController.skipIntroMs
+            skipOutroMs: playerController.skipOutroMs
+            onSkipIntroRequested: function(ms) { playerController.setSkipIntroMs(ms) }
+            onSkipOutroRequested: function(ms) { playerController.setSkipOutroMs(ms) }
             onFullScreenToggleRequested: window.toggleFullScreen()
             thumbnailImage: playerController.thumbnailPreview
             thumbnailPos: playerController.thumbnailPosition
@@ -1932,13 +2074,27 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ToolButton {
-                        text: "↻"
+                        contentItem: Text {
+                            text: "\uE72C"
+                            font.family: appTheme.iconFontFamily
+                            font.pixelSize: 12
+                            color: appTheme.textSecondaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
                         ToolTip.visible: hovered
                         ToolTip.text: "刷新评论"
                         onClicked: services.dmghgAnimeModel.loadComments(window.animePlaybackVodId, 1)
                     }
                     ToolButton {
-                        text: "×"
+                        contentItem: Text {
+                            text: "\uE711"
+                            font.family: appTheme.iconFontFamily
+                            font.pixelSize: 12
+                            color: appTheme.textSecondaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
                         ToolTip.visible: hovered
                         ToolTip.text: "关闭评论"
                         onClicked: {
@@ -2087,42 +2243,11 @@ ApplicationWindow {
         theme: appTheme
     }
 
-    Dialog {
-        id: sourceSwitchDialog
-        title: "鎾斁绾胯矾杈冩參"
-        anchors.centerIn: parent
-        modal: true
-        closePolicy: Popup.NoAutoClose
-        standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: playerController.acceptSourceSwitch()
-        onRejected: playerController.rejectSourceSwitch()
-
-        contentItem: ColumnLayout {
-            spacing: 10
-            Label {
-                Layout.preferredWidth: 360
-                text: playerController.sourceSwitchReason
-                wrapMode: Text.WordWrap
-                color: appTheme.textPrimaryColor
-            }
-            Label {
-                Layout.preferredWidth: 360
-                text: "是否切换到“" + playerController.sourceSwitchCandidate
-                    + "”？切换后会恢复当前集数和播放进度。"
-                wrapMode: Text.WordWrap
-                color: appTheme.textSecondaryColor
-            }
-        }
-
-        Connections {
-            target: playerController
-            function onSourceSwitchSuggestionChanged() {
-                if (playerController.sourceSwitchSuggested)
-                    sourceSwitchDialog.open()
-                else
-                    sourceSwitchDialog.close()
-            }
-        }
+    // User Profile dialog
+    UserProfileDialog {
+        id: userProfileDialog
+        theme: appTheme
+        authController: services.authController
     }
 
     // URL input dialog (Ctrl+U)
@@ -2332,7 +2457,9 @@ ApplicationWindow {
                         // ListView.index 是 delegate 根项的附加属性,嵌套子项无法直接以
                         // 裸 `index` 访问 (Qt6 会抛 "index is not defined",日志刷几万行)。
                         // 在根项上显式导出,子项用 episodeDel.epIndex 引用。
-                        property int epIndex: ListView.index
+                        // delegate 挂到 view 之前 ListView.index 还是 undefined，直接绑给
+                        // int 属性会刷一行 "Unable to assign [undefined] to int"。
+                        property int epIndex: ListView.index === undefined ? -1 : ListView.index
                         property bool currentEpisode: String(modelData) === window.animeCurrentEpisode
                         color: currentEpisode
                             ? appTheme.accentMutedColor
@@ -2393,5 +2520,32 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    // 监听退出登录：停止播放并重置状态
+    Connections {
+        target: services.authController
+        function onLoginStatusChanged() {
+            if (!services.authController.isLoggedIn) {
+                playerController.stop()
+                if (window.visibility === Window.FullScreen) {
+                    window.showNormal()
+                }
+            } else {
+                // 「我的」页在登录前就随主界面一起建好了，那一趟取数只能拿到"请先登录"。
+                // 会话一起来就补一次，正好停在页上的人不用退出再进。
+                myPage.refreshOnEntry()
+            }
+        }
+    }
+
+    // 登录界面：未登录时覆盖主界面
+    LoginView {
+        id: loginView
+        anchors.fill: parent
+        z: 9999
+        visible: !services.authController.isLoggedIn
+        theme: appTheme
+        authController: services.authController
     }
 }

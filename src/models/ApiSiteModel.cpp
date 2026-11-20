@@ -1,11 +1,17 @@
 #include "ApiSiteModel.h"
 
+#include "media/DmghgSecrets.h"
+
+#include "common/MediaUtils.h"
+
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -37,7 +43,8 @@ constexpr qint64 kJsonSitesMaxBytes = 1024 * 1024;
 constexpr auto kJsonSitesUrl = "https://gh-proxy.com/https://raw.githubusercontent.com/YYDS678/uzVideo/main/video_sources_default.json";
 
 QByteArray shareSecret() {
-    return QByteArrayLiteral("miniPlayer.site-share.v1.fixed-client-key.2026");
+    // 混淆内嵌 (DmghgSecrets), 防 strings 提取。
+    return DmghgSecrets::shareSecret();
 }
 
 QByteArray sha256(const QByteArray &data) {
@@ -90,11 +97,38 @@ QByteArray fromBase64Text(const QString &text, bool *ok) {
 ApiSiteModel::ApiSiteModel(QObject *parent)
     : QAbstractListModel(parent), configPath_(resolveConfigPath()) {
     loadFromFile();
-    ensureDefaults();
+    if (items_.isEmpty()) {
+        // 全新安装: 站点清单优先导入随安装包分发的 vod.txt (加密分享串, 离线可得);
+        // 文件缺失或解不开时才退回 Gitee 远端拉取, 两条路都拿不到才补内置默认站点。
+        freshInstallRemotePending_ = true;
+        connect(this, &ApiSiteModel::remoteSitesLoadFinished, this, [this](const QString &) {
+            if (!freshInstallRemotePending_)
+                return;
+            freshInstallRemotePending_ = false;
+            if (!items_.isEmpty())
+                return;
+            ensureDefaults();
+            ensureShareSelectionSize();
+            ensureAccessStateSize();
+            if (enforcePremiumOrder())
+                saveToFile();
+        });
+        const QString bundledPath = bundledSitesPath();
+        if (!bundledPath.isEmpty())
+            importSitesFromFile(bundledPath);
+        if (!items_.isEmpty())
+            freshInstallRemotePending_ = false;
+        else
+            loadRemoteSites();
+    } else {
+        ensureDefaults();
+    }
     ensureShareSelectionSize();
     ensureAccessStateSize();
     if (enforcePremiumOrder())
         saveToFile();
+    // pool 站点表覆盖本地清单（凭据就绪即拉取；变化由 AppServices 再触发）
+    loadPoolSites();
 }
 
 bool ApiSiteModel::remoteSitesLoading() const {
@@ -111,6 +145,20 @@ QString ApiSiteModel::resolveConfigPath() {
         dir = QDir::currentPath();
     QDir().mkpath(dir);
     return dir + "/api_sites.json";
+}
+
+QString ApiSiteModel::bundledSitesPath() {
+    // 安装快捷方式与 [Run] 的 WorkingDir 都是 {app}, 所以 exe 目录和当前目录
+    // 通常指向同一处; 开发期从构建目录启动时靠后者也能找到。
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/vod.txt"),
+        QDir::currentPath() + QStringLiteral("/vod.txt"),
+    };
+    for (const QString &candidate : candidates) {
+        if (QFileInfo::exists(candidate))
+            return candidate;
+    }
+    return {};
 }
 
 int ApiSiteModel::rowCount(const QModelIndex &parent) const {
@@ -202,6 +250,8 @@ void ApiSiteModel::add(const QString &name, const QString &baseUrl, const QStrin
 void ApiSiteModel::removeAt(int index) {
     if (index < 0 || index >= items_.size())
         return;
+
+    rememberDeletedSiteUrl(items_.at(index).baseUrl);
 
     const int previousCurrentIndex = currentIndex_;
     const QString previousCurrentName = currentName();
@@ -307,6 +357,10 @@ bool ApiSiteModel::selectAt(int index) {
         return false;
     setCurrentIndex(index);
     return currentIndex_ == index;
+}
+
+QString ApiSiteModel::sanitizeDisplay(const QString &text) const {
+    return MediaUtils::sanitizeUserText(text);
 }
 
 QString ApiSiteModel::nameAt(int index) const {
@@ -539,6 +593,11 @@ QString ApiSiteModel::removeSelectedSites() {
     if (selectedCount >= items_.size())
         return QStringLiteral("删除失败：至少需要保留一个站点");
 
+    for (int i = 0; i < items_.size(); ++i) {
+        if (shareSelected_.value(i, false))
+            rememberDeletedSiteUrl(items_.at(i).baseUrl);
+    }
+
     const int previousCurrentIndex = currentIndex_;
     const QString previousCurrentName = currentName();
     const QString previousCurrentBaseUrl = currentBaseUrl();
@@ -728,6 +787,21 @@ QString ApiSiteModel::importSitesFromText(const QString &text) {
     }
 
     return QStringLiteral("Import complete: added %1, updated %2, skipped %3").arg(imported).arg(updated).arg(skipped);
+}
+
+QString ApiSiteModel::importSitesFromFile(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QStringLiteral("加载站点失败：无法打开文件 %1").arg(QDir::toNativeSeparators(path));
+
+    const QByteArray content = file.readAll();
+    file.close();
+    if (content.trimmed().isEmpty())
+        return QStringLiteral("加载站点失败：文件为空");
+    if (content.size() > kRemoteSitesMaxBytes)
+        return QStringLiteral("加载站点失败：文件过大");
+
+    return importSitesFromText(QString::fromUtf8(content));
 }
 
 bool ApiSiteModel::hasShareContentInClipboard() const {
@@ -976,6 +1050,10 @@ void ApiSiteModel::refreshSiteStatusAt(int index) {
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("MeloBox/1.0 site-check"));
+    // pool 中转的 video 站需要登录会话
+    if (baseUrl.contains(QStringLiteral("/api/vod/")) && !poolSessionToken_.isEmpty())
+        request.setRawHeader("Cookie",
+                             QByteArrayLiteral("vpn_session=") + poolSessionToken_.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(kAccessTimeoutMs);
 
@@ -1125,6 +1203,101 @@ bool ApiSiteModel::enforcePremiumOrder() {
     return true;
 }
 
+void ApiSiteModel::setPoolCredentials(const QString &serverUrl, const QString &sessionToken) {
+    const QString trimmedUrl = serverUrl.trimmed();
+    const QString trimmedToken = sessionToken.trimmed();
+    if (trimmedUrl == poolServerUrl_ && trimmedToken == poolSessionToken_)
+        return;
+    poolServerUrl_ = trimmedUrl;
+    poolSessionToken_ = trimmedToken;
+    emit poolCredentialsChanged();
+    // 凭据就绪（登录恢复/成功）时拉取统一站点表；未登录保留本地清单
+    if (!poolServerUrl_.isEmpty() && !poolSessionToken_.isEmpty())
+        loadPoolSites();
+}
+
+QString ApiSiteModel::sourceIdAt(int index) const {
+    return (index >= 0 && index < items_.size()) ? items_[index].sourceId : QString();
+}
+
+QString ApiSiteModel::currentVideoSourceId() const {
+    const QString base = currentVideoBaseUrl();
+    for (const auto &item : items_) {
+        if (item.baseUrl == base && item.type == QStringLiteral("video"))
+            return item.sourceId;
+    }
+    return QString();
+}
+
+// 站点表主来源：pool /api/vod/sites。video 站 baseUrl 指向 pool 的
+// /api/vod/list?site=<id>（pool 归一成 MacCMS 形状，客户端解析层不变）；
+// image/shortvideo 站由 pool 下发原始 baseUrl 供客户端直连。
+void ApiSiteModel::loadPoolSites() {
+    if (poolServerUrl_.isEmpty() || poolSessionToken_.isEmpty())
+        return;
+
+    QNetworkRequest request{QUrl(poolServerUrl_ + QStringLiteral("/api/vod/sites"))};
+    request.setRawHeader("Accept", "application/json");
+    request.setRawHeader("Cookie",
+                         QByteArrayLiteral("vpn_session=") + poolSessionToken_.toUtf8());
+    request.setTransferTimeout(12000);
+
+    auto *reply = accessManager_.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError)
+            return;
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const auto data = doc.object().value(QStringLiteral("data")).toObject();
+
+        QVector<ApiSite> poolSites;
+        const auto videoArr = data.value(QStringLiteral("video")).toArray();
+        for (const auto &v : videoArr) {
+            const auto obj = v.toObject();
+            const QString id = obj.value(QStringLiteral("id")).toString().trimmed();
+            if (id.isEmpty())
+                continue;
+            ApiSite site;
+            site.name = obj.value(QStringLiteral("name")).toString(id);
+            site.baseUrl = poolServerUrl_ + QStringLiteral("/api/vod/list?site=") + id;
+            site.type = QStringLiteral("video");
+            site.sourceId = id;
+            poolSites.append(site);
+        }
+        if (poolSites.isEmpty())
+            return; // pool 站点表异常时保留本地清单
+
+        for (const auto &key : {QStringLiteral("image"), QStringLiteral("shortvideo")}) {
+            const auto arr = data.value(key).toArray();
+            for (const auto &v : arr) {
+                const auto obj = v.toObject();
+                const QString id = obj.value(QStringLiteral("id")).toString().trimmed();
+                const QString base = obj.value(QStringLiteral("baseUrl")).toString().trimmed();
+                if (id.isEmpty() || base.isEmpty())
+                    continue;
+                ApiSite site;
+                site.name = obj.value(QStringLiteral("name")).toString(id);
+                site.baseUrl = base;
+                site.type = key;
+                site.sourceId = id;
+                poolSites.append(site);
+            }
+        }
+
+        beginResetModel();
+        items_ = poolSites;
+        currentIndex_ = 0;
+        endResetModel();
+        emit countChanged();
+        emit currentIndexChanged();
+        emit currentSiteChanged();
+        ensureShareSelectionSize();
+        ensureAccessStateSize();
+        saveToFile();
+    });
+}
+
 void ApiSiteModel::loadFromFile() {
     QFile file(configPath_);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -1149,9 +1322,17 @@ void ApiSiteModel::loadFromFile() {
         const QString baseUrl = obj.value("baseUrl").toString().trimmed();
         const QString type = normalizeSiteType(obj.value("type").toString(QStringLiteral("video")));
         const bool premium = obj.value("premium").toBool(false);
+        const QString sourceId = obj.value("sourceId").toString().trimmed();
         if (!name.isEmpty() && !baseUrl.isEmpty()) {
-            items_.append({name, baseUrl, type, premium});
+            items_.append({name, baseUrl, type, premium, sourceId});
         }
+    }
+
+    const auto deletedArr = root.value("deletedSiteUrls").toArray();
+    for (const auto &val : deletedArr) {
+        const QString normalized = val.toString().trimmed();
+        if (!normalized.isEmpty())
+            deletedSiteUrls_.append(normalized);
     }
 }
 
@@ -1166,9 +1347,16 @@ void ApiSiteModel::saveToFile() {
         obj["baseUrl"] = item.baseUrl;
         obj["type"] = normalizeSiteType(item.type);
         obj["premium"] = item.premium;
+        if (!item.sourceId.isEmpty())
+            obj["sourceId"] = item.sourceId;
         arr.append(obj);
     }
     root["sites"] = arr;
+
+    QJsonArray deletedArr;
+    for (const QString &url : std::as_const(deletedSiteUrls_))
+        deletedArr.append(url);
+    root["deletedSiteUrls"] = deletedArr;
 
     QFile file(configPath_);
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1178,8 +1366,35 @@ void ApiSiteModel::saveToFile() {
 }
 
 void ApiSiteModel::ensureDefaults() {
-    if (items_.isEmpty()) {
-        add(QStringLiteral("默认视频"), QStringLiteral("https://mtzy2.com/provide/vod"), QStringLiteral("video"));
+    // 修复历史版本里 UTF-8 源码被按 GBK 误读留下的乱码默认站点名。
+    // 只在站点名仍是当年的乱码字面量时替换, 用户手动改过名的不动。
+    const auto repairLegacyMojibakeName = [this](const QString &url,
+                                                 const QString &legacyName,
+                                                 const QString &fixedName) {
+        const QString normalized = normalizeBaseUrl(url);
+        for (int index = 0; index < items_.size(); ++index) {
+            if (normalizeBaseUrl(items_.at(index).baseUrl) != normalized)
+                continue;
+            if (items_.at(index).name == legacyName) {
+                items_[index].name = fixedName;
+                const auto idx = createIndex(index, 0);
+                emit dataChanged(idx, idx, {NameRole});
+                saveToFile();
+            }
+            break;
+        }
+    };
+    repairLegacyMojibakeName(QStringLiteral("http://api.yujn.cn/api/ys.php??"),
+                             QStringLiteral("鍘熺"), QStringLiteral("原神"));
+    repairLegacyMojibakeName(QStringLiteral("http://api.yujn.cn/api/ksbianzhuang.php?type=video"),
+                             QStringLiteral("蹇墜鍙樿"), QStringLiteral("倍速变装"));
+    repairLegacyMojibakeName(QStringLiteral("http://api.yujn.cn/api/bianzhuang.php??"),
+                             QStringLiteral("鍙樿"), QStringLiteral("变装"));
+
+    // 默认站点只在缺失时补回；被用户手动删除过 (墓碑列表) 的不再复活。
+    const QString defaultVideoUrl = QStringLiteral("https://mtzy2.com/provide/vod");
+    if (items_.isEmpty() && !isDeletedSiteUrl(defaultVideoUrl)) {
+        add(QStringLiteral("默认视频"), defaultVideoUrl, QStringLiteral("video"));
     }
 
     bool hasImageSite = false;
@@ -1206,20 +1421,23 @@ void ApiSiteModel::ensureDefaults() {
             }
         }
     }
-    if (!hasImageSite) {
-        add(QStringLiteral("随机图片"), QStringLiteral("https://t.alcy.cc/json?pc"), QStringLiteral("image"));
+    const QString alcyUrl = QStringLiteral("https://t.alcy.cc/json?pc");
+    if (!hasImageSite && !isDeletedSiteUrl(alcyUrl)) {
+        add(QStringLiteral("随机图片"), alcyUrl, QStringLiteral("image"));
     }
 
-    if (!hasGzlAcgSite) {
+    if (!hasGzlAcgSite && !isDeletedSiteUrl(gzlAcgUrl)) {
         add(QStringLiteral("ACG图片"), gzlAcgUrl, QStringLiteral("image"));
     }
-    if (!hasCxkSite) {
+    if (!hasCxkSite && !isDeletedSiteUrl(cxkUrl)) {
         add(QStringLiteral("Heiliao image"), cxkUrl, QStringLiteral("image"));
     }
-    if (!hasEcySite) {
+    if (!hasEcySite && !isDeletedSiteUrl(ecyUrl)) {
         add(QStringLiteral("ACG image"), ecyUrl, QStringLiteral("image"));
     }
     auto addImageDefaultIfMissing = [this](const QString &name, const QString &url) {
+        if (isDeletedSiteUrl(url))
+            return;
         const QString normalizedUrl = normalizeBaseUrl(url);
         for (const auto &item : items_) {
             if (normalizeSiteType(item.type) == QStringLiteral("image") &&
@@ -1230,7 +1448,7 @@ void ApiSiteModel::ensureDefaults() {
         add(name, url, QStringLiteral("image"));
     };
     addImageDefaultIfMissing(QStringLiteral("萌宠"), QStringLiteral("http://api.yujn.cn/api/mc.php??"));
-    addImageDefaultIfMissing(QStringLiteral("鍘熺"), QStringLiteral("http://api.yujn.cn/api/ys.php??"));
+    addImageDefaultIfMissing(QStringLiteral("原神"), QStringLiteral("http://api.yujn.cn/api/ys.php??"));
     addImageDefaultIfMissing(QStringLiteral("Girl"), QStringLiteral("http://api.yujn.cn/api/jk.php??"));
     addImageDefaultIfMissing(QStringLiteral("白丝"), QStringLiteral("http://api.yujn.cn/api/baisi.php?"));
     addImageDefaultIfMissing(QStringLiteral("ACG"), QStringLiteral("https://app.zichen.zone/api/acg/api.php"));
@@ -1240,6 +1458,8 @@ void ApiSiteModel::ensureDefaults() {
     addImageDefaultIfMissing(QStringLiteral("动漫"), QStringLiteral("https://api.fuchenboke.cn/api/dongman.php"));
 
     auto addShortVideoDefaultIfMissing = [this](const QString &name, const QString &url) {
+        if (isDeletedSiteUrl(url))
+            return;
         const QString normalizedUrl = normalizeBaseUrl(url);
         for (const auto &item : items_) {
             if (normalizeSiteType(item.type) == QStringLiteral("shortvideo") &&
@@ -1264,11 +1484,11 @@ void ApiSiteModel::ensureDefaults() {
     addShortVideoDefaultIfMissing(QStringLiteral("Manyao"), QStringLiteral("http://api.yujn.cn/api/manyao.php?type=video"));
     addShortVideoDefaultIfMissing(QStringLiteral("足控"), QStringLiteral("http://api.yujn.cn/api/jpmt.php?type=video"));
     addShortVideoDefaultIfMissing(QStringLiteral("清纯"), QStringLiteral("http://api.yujn.cn/api/qingchun.php?type=video"));
-    addShortVideoDefaultIfMissing(QStringLiteral("蹇墜鍙樿"), QStringLiteral("http://api.yujn.cn/api/ksbianzhuang.php?type=video"));
+    addShortVideoDefaultIfMissing(QStringLiteral("倍速变装"), QStringLiteral("http://api.yujn.cn/api/ksbianzhuang.php?type=video"));
     addShortVideoDefaultIfMissing(QStringLiteral("Happy"), QStringLiteral("http://api.yujn.cn/api/ksbianzhuang.php?type=video"));
     addShortVideoDefaultIfMissing(QStringLiteral("萝莉"), QStringLiteral("http://api.yujn.cn/api/luoli.php?type=video"));
     addShortVideoDefaultIfMissing(QStringLiteral("Dance"), QStringLiteral("http://api.yujn.cn/api/rewu.php?type=video"));
-    addShortVideoDefaultIfMissing(QStringLiteral("鍙樿"), QStringLiteral("http://api.yujn.cn/api/bianzhuang.php??"));
+    addShortVideoDefaultIfMissing(QStringLiteral("变装"), QStringLiteral("http://api.yujn.cn/api/bianzhuang.php??"));
     addShortVideoDefaultIfMissing(QStringLiteral("Kuaishou girl"), QStringLiteral("http://api.yujn.cn/api/ksxjjsp.php?"));
     addShortVideoDefaultIfMissing(QStringLiteral("Girl backup"), QStringLiteral("http://api.yujn.cn/api/zzxjj.php"));
 
@@ -1295,6 +1515,17 @@ void ApiSiteModel::ensureAccessStateSize() {
         accessLatencyMs_.append(-1);
     while (accessLatencyMs_.size() > items_.size())
         accessLatencyMs_.removeLast();
+}
+
+void ApiSiteModel::rememberDeletedSiteUrl(const QString &baseUrl) {
+    const QString normalized = normalizeBaseUrl(baseUrl);
+    if (normalized.isEmpty() || deletedSiteUrls_.contains(normalized))
+        return;
+    deletedSiteUrls_.append(normalized);
+}
+
+bool ApiSiteModel::isDeletedSiteUrl(const QString &baseUrl) const {
+    return deletedSiteUrls_.contains(normalizeBaseUrl(baseUrl));
 }
 
 void ApiSiteModel::setAccessState(int index, int status, int latencyMs) {

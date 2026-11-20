@@ -8,6 +8,7 @@
 #include <QQueue>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 #include <QVector>
 
@@ -18,6 +19,8 @@ struct ApiSite {
     QString baseUrl;
     QString type = QStringLiteral("video");
     bool premium = false;
+    // pool 统一点播源站点 id（video 站请求经 pool /api/vod/* 中转）。
+    QString sourceId;
 };
 
 class ApiSiteModel final : public QAbstractListModel {
@@ -60,6 +63,8 @@ public:
     Q_INVOKABLE bool moveSiteToSlot(int from, int slot);
     Q_INVOKABLE bool selectAt(int index);
     Q_INVOKABLE QString nameAt(int index) const;
+    // 展示用文本打码 (来源域名/品牌 -> ***), 站点 URL 显示时使用。
+    Q_INVOKABLE QString sanitizeDisplay(const QString &text) const;
     Q_INVOKABLE QString baseUrlAt(int index) const;
     Q_INVOKABLE QString typeAt(int index) const;
     Q_INVOKABLE bool premiumAt(int index) const;
@@ -70,6 +75,12 @@ public:
     Q_INVOKABLE QString accessStatusTextAt(int index) const;
     Q_INVOKABLE QString currentBaseUrl() const;
     Q_INVOKABLE QString currentVideoBaseUrl() const;
+    // pool 统一点播源：站点表来自 pool /api/vod/sites，凭据由登录态同步进来
+    Q_INVOKABLE QString sourceIdAt(int index) const;
+    Q_INVOKABLE QString currentVideoSourceId() const;
+    void setPoolCredentials(const QString &serverUrl, const QString &sessionToken);
+    QString poolServerUrl() const { return poolServerUrl_; }
+    QString poolSessionToken() const { return poolSessionToken_; }
     Q_INVOKABLE QString imageBaseUrl() const;
     Q_INVOKABLE QString currentName() const;
     Q_INVOKABLE bool matchesFilter(int index, const QString &filter) const;
@@ -84,6 +95,7 @@ public:
     Q_INVOKABLE void loadRemoteSites();
     Q_INVOKABLE void loadJsonVideoSites();
     QString importJsonVideoSites(const QByteArray &content, bool refreshStatuses = true);
+    QString importSitesFromFile(const QString &path);
     Q_INVOKABLE void refreshSiteStatusAt(int index);
     Q_INVOKABLE void refreshAllSiteStatuses();
 
@@ -97,6 +109,7 @@ signals:
     void remoteSitesLoadFinished(const QString &message);
     void jsonSitesLoadingChanged();
     void jsonSitesLoadFinished(const QString &message);
+    void poolCredentialsChanged();
 
 private:
     QVector<ApiSite> items_;
@@ -108,16 +121,23 @@ private:
     QPointer<QNetworkReply> jsonSitesReply_;
     QQueue<QString> pendingStatusChecks_;
     QSet<QString> activeStatusChecks_;
+    QStringList deletedSiteUrls_;
+    bool freshInstallRemotePending_ = false;
     int currentIndex_ = 0;
     QString configPath_;
     bool remoteSitesLoading_ = false;
     bool jsonSitesLoading_ = false;
+    QString poolServerUrl_;
+    QString poolSessionToken_;
 
     void loadFromFile();
     void saveToFile();
+    void loadPoolSites();
     void ensureDefaults();
     void ensureShareSelectionSize();
     void ensureAccessStateSize();
+    void rememberDeletedSiteUrl(const QString &baseUrl);
+    bool isDeletedSiteUrl(const QString &baseUrl) const;
     void setAccessState(int index, int status, int latencyMs = -1);
     void setRemoteSitesLoading(bool loading);
     void setJsonSitesLoading(bool loading);
@@ -129,6 +149,8 @@ private:
     int premiumSiteCount() const;
 
     static QString resolveConfigPath();
+    // 随安装包分发在 exe 同目录的站点清单 (加密分享串), 全新安装时导入。
+    static QString bundledSitesPath();
     static QString normalizeBaseUrl(const QString &baseUrl);
     static QString normalizeSiteType(const QString &siteType);
     static QString accessStatusText(int status, int latencyMs);

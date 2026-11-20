@@ -41,6 +41,9 @@ public:
 
     Error open(const QString &path);
     void close();
+    // 退出快速关停: 与 close 等价但线程等待上限压到 ~400ms/线程, 避免退出被
+    // 卡死的网络线程拖住 3s x3 + 2s。
+    void shutdownFast();
     void play();
     void pause();
     void stop();
@@ -170,10 +173,17 @@ private:
     void presentFirstFrame();
     void startPipeline();
     void startAudioOutputThread();
-    void stopPipeline();
+    void stopPipeline(int waitMsPerThread = 3000);
     void flushQueues();
     void onSyncTimerTick();
     void processSubtitlePackets();
+
+    // FFmpeg 回退管线的 EOF 收尾: onDemuxEof 由解封装线程的 finished 触发,
+    // 等尾部数据排空后统一 finishPlayback (设 eofReached_ + 停管线 + stateChanged),
+    // 不再单纯依赖 AudioOutput::finished 的信号送达。
+    void onDemuxEof();
+    void finishPlayback();
+    bool demuxEofPending_ = false;
 
     // Image HLS
     Error openImageHls();

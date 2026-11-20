@@ -82,10 +82,10 @@ Rectangle {
                         height: 88
                         radius: theme ? theme.controlRadius : 10
                         color: index === root.selectedIndex
-                            ? (theme ? theme.accentMutedColor : "#7a4a17")
+                            ? (theme ? theme.accentMutedColor : "#14382c")
                             : (videoMouse.containsMouse ? (theme ? theme.panelRaisedColor : "#242424") : "#151515")
                         border.color: index === root.selectedIndex
-                            ? (theme ? theme.accentColor : "#f28c28")
+                            ? (theme ? theme.accentColor : "#10b981")
                             : (theme ? theme.subtleBorderColor : "#282828")
                         border.width: 1
 
@@ -272,7 +272,7 @@ Rectangle {
                                 text: (modelData.m3u8Only ? "m3u8 " : "") + modelData.status + " " + modelData.progress + "%"
                                 color: modelData.status === "完成"
                                     ? (theme ? theme.successColor : "#6ec16e")
-                                    : (theme ? theme.accentColor : "#f28c28")
+                                    : (theme ? theme.accentColor : "#10b981")
                                 font.family: theme ? theme.fontFamily : "Segoe UI"
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight

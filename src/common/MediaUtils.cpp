@@ -16,6 +16,21 @@
 
 namespace MediaUtils {
 
+namespace {
+bool startsWithImageMagic(const QByteArray &bytes) {
+    return bytes.startsWith("\xff\xd8\xff")            // JPEG
+        || bytes.startsWith("\x89PNG")                 // PNG
+        || bytes.startsWith("GIF8")                    // GIF
+        || (bytes.size() >= 12 && bytes.startsWith("RIFF")
+            && bytes.mid(8, 4) == "WEBP")              // WEBP
+        || bytes.startsWith("BM");                     // BMP
+}
+}  // namespace
+
+bool hasImageMagic(const QByteArray &bytes) {
+    return startsWithImageMagic(bytes);
+}
+
 QImage imageFromBytes(const QByteArray &bytes) {
     QBuffer inputBuffer;
     inputBuffer.setData(bytes);
@@ -23,6 +38,58 @@ QImage imageFromBytes(const QByteArray &bytes) {
     QImageReader reader(&inputBuffer);
     reader.setAutoTransform(true);
     return reader.read();
+}
+
+QByteArray sanitizedImageBytes(const QByteArray &bytes) {
+    if (startsWithImageMagic(bytes))
+        return bytes;
+
+    // 中流搜索只信高强度魔数: JPEG/PNG/GIF 与 RIFF+WEBP 组合。
+    // BMP 的 "BM" 只有 2 字节且可能出现在文本里, 不做中流匹配。
+    qsizetype best = -1;
+    const auto consider = [&best](qsizetype pos) {
+        if (pos >= 0 && (best < 0 || pos < best))
+            best = pos;
+    };
+    consider(bytes.indexOf("\xff\xd8\xff"));
+    consider(bytes.indexOf("\x89PNG"));
+    consider(bytes.indexOf("GIF8"));
+    qsizetype riff = bytes.indexOf("RIFF");
+    while (riff >= 0) {
+        if (bytes.size() >= riff + 12 && bytes.mid(riff + 8, 4) == "WEBP") {
+            consider(riff);
+            break;
+        }
+        riff = bytes.indexOf("RIFF", riff + 1);
+    }
+    if (best < 0)
+        return {};
+    return bytes.mid(int(best));
+}
+
+QString sanitizeUserText(const QString &text) {
+    if (text.isEmpty())
+        return text;
+    QString out = text;
+
+    // 来源品牌与域名 -> *** (展示层屏蔽内容来源)。
+    // 品牌词用 PCRE2 unicode 转义书写, 避免被批量字面替换破坏正则。
+    static const QRegularExpression brandPat(
+        QStringLiteral("\\x{52a8}\\x{6f2b}\\x{5171}\\x{548c}\\x{56fd}|(?:www\\.)?oneghg(?:\\.com)?|(?:www\\.)?dongman\\.to"));
+    out.replace(brandPat, QStringLiteral("***"));
+
+    // 骂人词 -> *** (保守词表, 只列明确粗俗项, 大小写不敏感)
+    static const QStringList profanity = {
+        QStringLiteral("傻逼"), QStringLiteral("煞笔"), QStringLiteral("草泥马"),
+        QStringLiteral("操你"), QStringLiteral("日你"), QStringLiteral("他妈的"),
+        QStringLiteral("你妈的"), QStringLiteral("妈的"), QStringLiteral("鸡巴"),
+        QStringLiteral("狗屁"), QStringLiteral("贱人"), QStringLiteral("尼玛"),
+        QStringLiteral("我操"), QStringLiteral("nmsl"), QStringLiteral("fuck"),
+        QStringLiteral("shit"), QStringLiteral("bitch"), QStringLiteral("asshole"),
+    };
+    for (const QString &word : profanity)
+        out.replace(word, QStringLiteral("***"), Qt::CaseInsensitive);
+    return out;
 }
 
 QString redirectedUrlFromReply(QNetworkReply *reply) {

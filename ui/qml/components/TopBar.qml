@@ -23,7 +23,7 @@ Rectangle {
             Layout.preferredWidth: 44
             Layout.preferredHeight: 44
             radius: 12
-            color: theme ? theme.accentColor : "#f28c28"
+            color: theme ? theme.accentColor : "#10b981"
 
             Text {
                 anchors.centerIn: parent
@@ -88,7 +88,7 @@ Rectangle {
                 }
 
                 Text {
-                    color: theme ? theme.accentColor : "#f28c28"
+                    color: theme ? theme.accentColor : "#10b981"
                     text: root.currentFileSubtitle.length > 0 ? root.currentFileSubtitle : "Ctrl+O"
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.captionSize : 11

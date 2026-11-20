@@ -121,7 +121,7 @@ void HlsPlaylistProxy::fetchPlaylist(QTcpSocket *socket, const QUrl &source, int
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
-    request.setTransferTimeout(12000);
+    request.setTransferTimeout(9000);
 
     QSslConfiguration ssl = QSslConfiguration::defaultConfiguration();
     ssl.setPeerVerifyMode(QSslSocket::VerifyNone);

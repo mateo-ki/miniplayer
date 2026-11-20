@@ -13,6 +13,8 @@
 
 struct VodItem {
     int vodId = 0;
+    /// 原始 id 字符串：MacCMS 数字 id 与 dongpian 字符串 id（"av_xxx"）都保留
+    QString vodIdStr;
     QString vodName;
     QString vodPic;
     QString vodRemarks;
@@ -63,6 +65,9 @@ public:
 
     explicit VideoSearchModel(QObject *parent = nullptr);
 
+    // pool 统一点播源的会话令牌（AppServices 装配时同步；请求 /api/vod/* 时附带）
+    static void setPoolSessionToken(const QString &token);
+
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
@@ -103,6 +108,7 @@ signals:
 private:
     QVector<VodItem> items_;
     QNetworkAccessManager nam_;
+    static QString s_poolSessionToken_;
     bool loading_ = false;
     int totalCount_ = 0;
     int currentPage_ = 1;

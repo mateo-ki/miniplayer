@@ -8,6 +8,7 @@ Rectangle {
     property var theme
     property var sidebar: null
     property int selectedVodId: 0
+    property string selectedVodKey: ""
     property string selectedTypeId: ""
     property string selectedParentTypeId: ""
     property var categoryTags: []
@@ -17,6 +18,30 @@ Rectangle {
     property bool siteDropdownOpen: false
     signal manageSitesRequested()
     signal playbackRequested()
+
+    readonly property var weekdays: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    function getTodayWeekday() {
+        var d = new Date()
+        var day = d.getDay()
+        return day === 0 ? 7 : day
+    }
+    property int selectedScheduleDay: getTodayWeekday()
+    readonly property var scheduleDaysMap: (services && services.videoCatalog && services.videoCatalog.scheduleDays) ? services.videoCatalog.scheduleDays : ({})
+    readonly property var currentScheduleItems: {
+        var map = scheduleDaysMap
+        var k = String(selectedScheduleDay)
+        if (map && map[k] && map[k].length > 0) return map[k]
+        return []
+    }
+    property bool scheduleExpanded: true
+
+    function requestScheduleLoad() {
+        if (services && services.videoCatalog && services.videoCatalog.loadWeeklySchedule)
+            services.videoCatalog.loadWeeklySchedule()
+    }
+
+    onVisibleChanged: if (visible && !detailActive) requestScheduleLoad()
+    StackLayout.onIsCurrentItemChanged: if (StackLayout.isCurrentItem && !detailActive) requestScheduleLoad()
 
     ListModel {
         id: videoSiteList
@@ -177,9 +202,10 @@ Rectangle {
 
                                             Text {
                                                 anchors.centerIn: parent
-                                                text: root.currentVideoSiteIndex() === model.sourceIndex ? "✓" : ""
-                                                color: "#7ff0ad"
-                                                font.pixelSize: 11
+                                                text: root.currentVideoSiteIndex() === model.sourceIndex ? "\uE73E" : ""
+                                                font.family: theme.iconFontFamily
+                                                color: theme.accentColor
+                                                font.pixelSize: 10
                                                 font.bold: true
                                             }
                                         }
@@ -236,48 +262,6 @@ Rectangle {
                                 Layout.preferredHeight: 1
                                 color: theme.subtleBorderColor
                             }
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 36
-                                radius: 8
-                                color: manageSiteMouse.containsMouse ? theme.panelRaisedColor : "transparent"
-                                border.color: manageSiteMouse.containsMouse ? theme.borderColor : "transparent"
-                                border.width: 1
-
-                                MouseArea {
-                                    id: manageSiteMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        sitePopup.close()
-                                        root.manageSitesRequested()
-                                    }
-                                }
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 12
-                                    anchors.rightMargin: 12
-                                    spacing: 8
-
-                                    Text {
-                                        text: "+"
-                                        color: theme.accentColor
-                                        font.pixelSize: 18
-                                        font.bold: true
-                                    }
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: "管理站点..."
-                                        color: theme.textSecondaryColor
-                                        font.pixelSize: 12
-                                        font.family: theme.fontFamily
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -320,6 +304,227 @@ Rectangle {
                         color: "#ffffff"
                         font.pixelSize: 13
                         font.bold: true
+                        font.family: theme.fontFamily
+                    }
+                }
+            }
+        }
+
+        // 每周更新排播卡片
+        Rectangle {
+            id: scheduleCard
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.scheduleExpanded ? 210 : 44
+            radius: theme.controlRadius
+            color: theme.panelColor
+            border.color: theme.borderColor
+            border.width: 1
+            clip: true
+
+            Behavior on Layout.preferredHeight {
+                NumberAnimation { duration: 180; easing.type: Easing.OutQuad }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+
+                // 头部：标题与周几切换按钮
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 28
+                    spacing: 8
+
+                    Text {
+                        text: "每周更新"
+                        color: theme.textPrimaryColor
+                        font.family: theme.fontFamily
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+
+                    Item { Layout.preferredWidth: 6 }
+
+                    Repeater {
+                        model: root.weekdays
+                        Rectangle {
+                            readonly property int dayNum: index + 1
+                            readonly property bool isSelected: root.selectedScheduleDay === dayNum
+                            readonly property bool isToday: root.getTodayWeekday() === dayNum
+                            Layout.preferredWidth: isToday ? 58 : 46
+                            Layout.preferredHeight: 26
+                            radius: 4
+                            color: isSelected
+                                ? theme.accentColor
+                                : (dayMouse.containsMouse ? theme.panelRaisedColor : theme.surfaceColor)
+                            border.color: isSelected ? theme.accentColor : theme.borderColor
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData + (isToday ? "·今" : "")
+                                color: isSelected ? "#ffffff" : (dayMouse.containsMouse ? theme.textPrimaryColor : theme.textSecondaryColor)
+                                font.pixelSize: 11
+                                font.bold: isSelected || isToday
+                                font.family: theme.fontFamily
+                            }
+
+                            MouseArea {
+                                id: dayMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selectedScheduleDay = dayNum
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    // 折叠/展开按钮
+                    Rectangle {
+                        Layout.preferredWidth: 26
+                        Layout.preferredHeight: 26
+                        radius: 4
+                        color: expandMouse.containsMouse ? theme.panelRaisedColor : "transparent"
+                        Text {
+                            anchors.centerIn: parent
+                            text: root.scheduleExpanded ? "▲" : "▼"
+                            color: theme.textMutedColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: expandMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.scheduleExpanded = !root.scheduleExpanded
+                        }
+                    }
+                }
+
+                // 排播列表 (横向滑动)
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: root.scheduleExpanded
+
+                    ListView {
+                        id: scheduleList
+                        anchors.fill: parent
+                        orientation: ListView.Horizontal
+                        spacing: 10
+                        clip: true
+                        model: root.currentScheduleItems
+
+                        delegate: Rectangle {
+                            width: 104
+                            height: scheduleList.height
+                            radius: 6
+                            color: cardMouse.containsMouse ? theme.panelRaisedColor : "transparent"
+                            border.color: cardMouse.containsMouse ? theme.accentColor : "transparent"
+                            border.width: 1
+
+                            MouseArea {
+                                id: cardMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    playerController.resetMouseCursor()
+                                    if (modelData.vodIdStr && modelData.vodIdStr.length > 0) {
+                                        root.selectedVodId = 0
+                                        root.selectedVodKey = modelData.vodIdStr
+                                        root.showVodDetail(modelData)
+                                        services.videoCatalog.loadVideoDetailByKey(modelData.vodIdStr)
+                                    } else if (modelData.vodName) {
+                                        searchInput.text = modelData.vodName
+                                        root.closeCategoryPopup()
+                                        root.selectedTypeId = ""
+                                        root.selectedParentTypeId = ""
+                                        root.childCategoryTags = []
+                                        root.doSearch()
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                spacing: 4
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    radius: 4
+                                    clip: true
+                                    color: theme.surfaceColor
+
+                                    Image {
+                                        anchors.fill: parent
+                                        source: modelData.vodPic || ""
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                    }
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "🎬"
+                                        font.pixelSize: 22
+                                        color: theme.textMutedColor
+                                        visible: !modelData.vodPic
+                                    }
+
+                                    // 底部更新时间标签
+                                    Rectangle {
+                                        anchors.bottom: parent.bottom
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        height: 18
+                                        color: "#b0000000"
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            width: parent.width - 6
+                                            text: {
+                                                var s = modelData.schedule || ""
+                                                if (s.indexOf('|') >= 0) return s.split('|')[1]
+                                                return s || modelData.vodRemarks || ""
+                                            }
+                                            color: "#ffffff"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                            elide: Text.ElideRight
+                                            horizontalAlignment: Text.AlignHCenter
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 18
+                                    text: modelData.vodName || ""
+                                    color: cardMouse.containsMouse ? theme.accentColor : theme.textPrimaryColor
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.family: theme.fontFamily
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+                            }
+                        }
+                    }
+
+                    // 空状态提示
+                    Text {
+                        anchors.centerIn: parent
+                        visible: root.currentScheduleItems.length === 0
+                        text: (services && services.videoCatalog && services.videoCatalog.scheduleLoading)
+                            ? "正在加载每周更新排播表..."
+                            : (root.weekdays[root.selectedScheduleDay - 1] + "暂时没有影视排播更新")
+                        color: theme.textMutedColor
+                        font.pixelSize: 12
                         font.family: theme.fontFamily
                     }
                 }
@@ -395,9 +600,10 @@ Rectangle {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: root.currentVideoSiteIndex() === model.sourceIndex ? "✓" : ""
-                                color: "#7ff0ad"
-                                font.pixelSize: 11
+                                text: root.currentVideoSiteIndex() === model.sourceIndex ? "\uE73E" : ""
+                                font.family: theme.iconFontFamily
+                                color: theme.accentColor
+                                font.pixelSize: 10
                                 font.bold: true
                             }
                         }
@@ -614,8 +820,13 @@ Rectangle {
                         var vod = services.videoCatalog.videoSearchModel.itemMapAt(index)
                         if (!vod) return
                         root.selectedVodId = vod.vodId || 0
+                        // dongpian 等源的 id 是字符串，int 会归零——始终用原始 key 拉详情，
+                        // 并在 detailReceived 回来后刷新面板（消除"点击时补充详情未到"的竞态）
+                        root.selectedVodKey = vod.vodIdStr || ""
                         root.showVodDetail(vod)
-                        if (root.selectedVodId > 0) {
+                        if (root.selectedVodKey.length > 0) {
+                            services.videoCatalog.loadVideoDetailByKey(root.selectedVodKey)
+                        } else if (root.selectedVodId > 0) {
                             services.videoCatalog.loadVideoDetail(root.selectedVodId)
                         }
                     }
@@ -847,6 +1058,7 @@ Rectangle {
     Component.onCompleted: {
         refreshCategoryTags()
         root.rebuildVideoSites()
+        root.requestScheduleLoad()
     }
 
     function doSearch() {
@@ -1075,7 +1287,12 @@ Rectangle {
         function onDetailReceived(index) {
             var vod = services.videoCatalog.detailSearchModel.itemMapAt(index)
             if (!vod || !root.detailActive) return
-            if (root.selectedVodId > 0 && vod.vodId !== root.selectedVodId) return
+            // 空详情（比如误发的 id=0 查询）不覆盖面板
+            if (!vod.vodName) return
+            // 按 key/数字 id 双重匹配：只接受与当前选中条目一致的详情
+            if (root.selectedVodKey.length > 0) {
+                if ((vod.vodIdStr || "") !== root.selectedVodKey) return
+            } else if (root.selectedVodId > 0 && vod.vodId !== root.selectedVodId) return
             root.showVodDetail(vod)
         }
     }

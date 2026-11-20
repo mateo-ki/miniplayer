@@ -75,7 +75,7 @@ QtObject {
     readonly property string musicProcessing: "正在处理音乐请求..."
     readonly property string neteaseLabel: "网易云"
     readonly property string qqMusicLabel: "QQ音乐"
-    readonly property string musicIcon: "♪"
-    readonly property string playIcon: "▶"
-    readonly property string closeIcon: "×"
+    readonly property string musicIcon: "\uEC4F"
+    readonly property string playIcon: "\uE768"
+    readonly property string closeIcon: "\uE711"
 }

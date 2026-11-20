@@ -161,9 +161,10 @@ Dialog {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "✎"
+                            text: "\uE70F"
+                            font.family: theme.iconFontFamily
                             color: theme.textSecondaryColor
-                            font.pixelSize: 14
+                            font.pixelSize: 12
                         }
                     }
 
@@ -184,9 +185,10 @@ Dialog {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "×"
+                            text: "\uE74D"
+                            font.family: theme.iconFontFamily
                             color: delBtnMouse.containsMouse ? "#ffffff" : theme.textMutedColor
-                            font.pixelSize: 16
+                            font.pixelSize: 12
                         }
                     }
                 }

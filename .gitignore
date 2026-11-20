@@ -21,3 +21,9 @@ third_party/mpv/*.json
 compile_commands.json
 CMakeUserPresets.json
 Testing/
+install_log.txt
+test_pool.txt
+test_result.txt
+tools/qml_view_grab.png
+.zcode/
+vod.txt

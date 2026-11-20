@@ -77,11 +77,11 @@ Rectangle {
                 Layout.preferredWidth: 92
                 Layout.preferredHeight: 24
                 radius: 12
-                color: theme ? theme.accentMutedColor : "#7a4a17"
+                color: theme ? theme.accentMutedColor : "#14382c"
 
                 Text {
                     anchors.centerIn: parent
-                    color: theme ? theme.accentColor : "#f28c28"
+                    color: theme ? theme.accentColor : "#10b981"
                     text: root.badgeText
                     font.family: theme ? theme.fontFamily : "Segoe UI"
                     font.pixelSize: theme ? theme.captionSize : 11
@@ -153,7 +153,7 @@ Rectangle {
                             Layout.preferredWidth: 46
                             color: level === "ERROR" ? (root.theme ? root.theme.dangerColor : "#e06c63")
                                 : level === "WARN" ? (root.theme ? root.theme.warningColor : "#f0b34a")
-                                : (root.theme ? root.theme.accentColor : "#f28c28")
+                                : (root.theme ? root.theme.accentColor : "#10b981")
                             text: level
                             font.family: "Consolas"
                             font.pixelSize: root.theme ? root.theme.captionSize : 11

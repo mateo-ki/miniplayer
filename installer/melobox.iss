@@ -8,6 +8,9 @@
 #ifnexist SourceDir + "\MeloBox.exe"
   #error "Missing MeloBox.exe in dist\MeloBox. Build and stage Release files before compiling installer."
 #endif
+#ifnexist SourceDir + "\vod.txt"
+  #error "Missing vod.txt in dist\MeloBox. The bundled first-launch site list is required."
+#endif
 #ifnexist SourceDir + "\libmpv-2.dll"
   #error "Missing libmpv-2.dll in dist\MeloBox. Run deployment staging before compiling installer."
 #endif
@@ -112,7 +115,9 @@ RestartApplications=no
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："; Flags: unchecked
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.lib,*.exp,*.pdb,*Tests.exe,gtest*.dll,gmock*.dll,*.log,miniPlayer.exe,*smoke*.txt"
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.lib,*.exp,*.pdb,*Tests.exe,gtest*.dll,gmock*.dll,*.log,*.txt,miniPlayer.exe,redist\*,dmghg_key.pem"
+; 上一条用 *.txt 排掉了所有文本文件, 首次启动站点清单要单独放行。
+Source: "{#SourceDir}\vod.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\MeloBox"; Filename: "{app}\MeloBox.exe"; WorkingDir: "{app}"
@@ -120,3 +125,22 @@ Name: "{autodesktop}\MeloBox"; Filename: "{app}\MeloBox.exe"; WorkingDir: "{app}
 
 [Run]
 Filename: "{app}\MeloBox.exe"; Description: "启动 MeloBox"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; 安装目录整个删除: 运行期间生成的日志/缓存/下载/换版本备份 (MeloBox.exe.bak-*)
+; 等不在安装器文件清单里, 不显式声明会让整个目录残留在磁盘上。
+Type: filesandordirs; Name: "{app}"
+; 应用配置/缓存/日志在 %LocalAppData%\MeloBox (api_sites.json、cache、download 等)
+Type: filesandordirs; Name: "{localappdata}\MeloBox"
+; 旧版本遗留的配置目录与散落配置文件
+Type: filesandordirs; Name: "{localappdata}\miniPlayer"
+Type: files; Name: "{localappdata}\api_sites.json"
+
+[Code]
+// 卸载时同步清理 QSettings 写入 HKCU 的应用设置 (dmghg/discoveredHosts 等)
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\MeloBox');
+end;
+

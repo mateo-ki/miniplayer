@@ -23,6 +23,7 @@ QString jsonValueToString(const QJsonValue &value) {
 QVariantMap vodItemToMap(const VodItem &item) {
     QVariantMap map;
     map[QStringLiteral("vodId")] = item.vodId;
+    map[QStringLiteral("vodIdStr")] = item.vodIdStr;
     map[QStringLiteral("vodName")] = item.vodName;
     map[QStringLiteral("vodPic")] = item.vodPic;
     map[QStringLiteral("vodRemarks")] = item.vodRemarks;
@@ -165,11 +166,29 @@ void VideoSearchModel::setErrorMessage(const QString &msg) {
     emit errorMessageChanged();
 }
 
+// 站点 baseUrl 可能自带 query（pool 中转站带 site= 参数）：
+// 已含 ? 时用 & 续接，避免拼出双问号的坏 URL
+static QString joinedUrl(const QString &baseUrl, const QString &query) {
+    return baseUrl.contains(QLatin1Char('?')) ? baseUrl + QLatin1Char('&') + query
+                                              : baseUrl + QLatin1Char('?') + query;
+}
+
+QString VideoSearchModel::s_poolSessionToken_;
+
+void VideoSearchModel::setPoolSessionToken(const QString &token) {
+    s_poolSessionToken_ = token.trimmed();
+}
+
 QNetworkRequest VideoSearchModel::makeRequest(const QString &url) const {
     QUrl qurl(url);
     QNetworkRequest req(qurl);
     req.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
     req.setRawHeader("Accept", "application/json");
+    // pool 中转的视频站需要登录会话；直连站不带
+    if (url.contains(QStringLiteral("/api/vod/")) && !s_poolSessionToken_.isEmpty()) {
+        req.setRawHeader("Cookie",
+                         QByteArrayLiteral("vpn_session=") + s_poolSessionToken_.toUtf8());
+    }
     return req;
 }
 
@@ -246,8 +265,9 @@ void VideoSearchModel::search(const QString &baseUrl, const QString &keyword, in
         return;
     }
 
-    QString url = baseUrl + "?ac=detail&wd=" + QUrl::toPercentEncoding(keyword)
-        + "&pg=" + QString::number(page) + "&limit=" + QString::number(kVideoPageSize);
+    QString url = joinedUrl(baseUrl, QStringLiteral("ac=detail&wd=")
+        + QUrl::toPercentEncoding(keyword)
+        + "&pg=" + QString::number(page) + "&limit=" + QString::number(kVideoPageSize));
     auto *reply = nam_.get(makeRequest(url));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, page, requestSerial, baseUrl, append, key]() {
@@ -281,7 +301,7 @@ void VideoSearchModel::searchById(const QString &baseUrl, const QString &ids) {
     setLoading(true);
     setErrorMessage({});
 
-    QString url = baseUrl + "?ac=detail&ids=" + ids;
+    QString url = joinedUrl(baseUrl, QStringLiteral("ac=detail&ids=") + ids);
     auto *reply = nam_.get(makeRequest(url));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, requestSerial, baseUrl]() {
@@ -322,8 +342,8 @@ void VideoSearchModel::loadList(const QString &baseUrl, int page, const QString 
         return;
     }
 
-    QString url = baseUrl + "?ac=list&pg=" + QString::number(page)
-        + "&limit=" + QString::number(kVideoPageSize);
+    QString url = joinedUrl(baseUrl, QStringLiteral("ac=list&pg=")
+        + QString::number(page) + "&limit=" + QString::number(kVideoPageSize));
     if (!trimmedTypeId.isEmpty()) {
         url += "&t=" + QUrl::toPercentEncoding(trimmedTypeId);
     }
@@ -407,7 +427,8 @@ static VodItem parseVodObject(const QJsonObject &obj, const QString &baseUrl) {
     };
 
     VodItem item;
-    item.vodId = obj.value("vod_id").toInt();
+    item.vodIdStr = valueToString(obj.value("vod_id")).trimmed();
+    item.vodId = item.vodIdStr.toInt();
     item.vodName = obj.value("vod_name").toString();
     item.vodPic = normalizeAssetUrl(baseUrl, obj.value("vod_pic").toString());
     item.vodRemarks = valueToString(obj.value("vod_remarks"));
@@ -445,14 +466,15 @@ void VideoSearchModel::requestSupplementDetails(const QString &baseUrl, int requ
     QStringList ids;
     ids.reserve(items_.size());
     for (const VodItem &item : std::as_const(items_)) {
-        if (item.vodId <= 0) continue;
+        // dongpian 等源的 vod_id 是字符串（"av_xxx"），toInt 后为 0，必须用原始字符串
+        if (item.vodIdStr.trimmed().isEmpty()) continue;
         if (!item.vodPic.trimmed().isEmpty() && !item.vodPlayUrl.trimmed().isEmpty()) continue;
-        ids.append(QString::number(item.vodId));
+        ids.append(item.vodIdStr);
     }
 
     if (ids.isEmpty()) return;
 
-    QString url = baseUrl + "?ac=detail&ids=" + ids.join(',');
+    QString url = joinedUrl(baseUrl, QStringLiteral("ac=detail&ids=") + ids.join(','));
     auto *reply = nam_.get(makeRequest(url));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, requestSerial, baseUrl]() {
@@ -466,20 +488,28 @@ void VideoSearchModel::requestSupplementDetails(const QString &baseUrl, int requ
         auto doc = QJsonDocument::fromJson(reply->readAll());
         if (doc.isNull() || !doc.isObject()) return;
 
-        auto list = doc.object().value("list").toArray();
+        // pool /api/vod/* 返回 {ok,message,data:<cms payload>} 信封；直连站点无信封
+        auto root = doc.object();
+        if (root.contains(QStringLiteral("data")) && root.value(QStringLiteral("data")).isObject()) {
+            const auto inner = root.value(QStringLiteral("data")).toObject();
+            if (inner.contains(QStringLiteral("list")))
+                root = inner;
+        }
+        auto list = root.value("list").toArray();
         if (list.isEmpty()) return;
 
-        QHash<int, int> rowById;
+        QHash<QString, int> rowById;
         for (int row = 0; row < items_.size(); ++row) {
-            rowById.insert(items_[row].vodId, row);
+            if (!items_[row].vodIdStr.isEmpty())
+                rowById.insert(items_[row].vodIdStr, row);
         }
 
         for (const auto &value : list) {
             if (!value.isObject()) continue;
             VodItem detail = parseVodObject(value.toObject(), baseUrl);
-            if (!rowById.contains(detail.vodId)) continue;
+            if (!rowById.contains(detail.vodIdStr)) continue;
 
-            const int row = rowById.value(detail.vodId);
+            const int row = rowById.value(detail.vodIdStr);
             VodItem &item = items_[row];
             item.vodPic = detail.vodPic.isEmpty() ? item.vodPic : detail.vodPic;
             item.vodRemarks = detail.vodRemarks.isEmpty() ? item.vodRemarks : detail.vodRemarks;
@@ -518,6 +548,13 @@ void VideoSearchModel::requestSupplementDetails(const QString &baseUrl, int requ
 void VideoSearchModel::parseListResponse(const QJsonDocument &doc, const QString &baseUrl,
                                          bool append, bool requestSupplement) {
     auto root = doc.object();
+    // pool /api/vod/* 返回 {ok,message,data:<cms payload>} 信封；直连站点无信封。
+    // 数据在 data 里时解包（MacCMS 形状：class/list/total/pagecount）
+    if (root.contains(QStringLiteral("data")) && root.value(QStringLiteral("data")).isObject()) {
+        const auto inner = root.value(QStringLiteral("data")).toObject();
+        if (inner.contains(QStringLiteral("list")) || inner.contains(QStringLiteral("class")))
+            root = inner;
+    }
     int newTotal = root.value("total").toInt();
     int newPages = root.value("pagecount").toInt();
 
@@ -546,15 +583,24 @@ void VideoSearchModel::parseListResponse(const QJsonDocument &doc, const QString
     if (!append)
         items_.clear();
     QSet<int> existingIds;
-    for (const auto &item : std::as_const(items_))
+    QSet<QString> existingStrIds;
+    for (const auto &item : std::as_const(items_)) {
         existingIds.insert(item.vodId);
+        if (!item.vodIdStr.isEmpty())
+            existingStrIds.insert(item.vodIdStr);
+    }
     auto list = root.value("list").toArray();
     for (const auto &val : list) {
         if (!val.isObject()) continue;
         const auto item = parseVodObject(val.toObject(), baseUrl);
-        if (!append || !existingIds.contains(item.vodId)) {
+        const bool dup = (item.vodIdStr.isEmpty()
+                              ? existingIds.contains(item.vodId)
+                              : existingStrIds.contains(item.vodIdStr));
+        if (!append || !dup) {
             items_.append(item);
             existingIds.insert(item.vodId);
+            if (!item.vodIdStr.isEmpty())
+                existingStrIds.insert(item.vodIdStr);
         }
     }
     endResetModel();
@@ -575,6 +621,12 @@ void VideoSearchModel::parseListResponse(const QJsonDocument &doc, const QString
 
 void VideoSearchModel::parseDetailResponse(const QJsonDocument &doc, const QString &baseUrl) {
     auto root = doc.object();
+    // pool /api/vod/* 信封解包（与 parseListResponse 一致）
+    if (root.contains(QStringLiteral("data")) && root.value(QStringLiteral("data")).isObject()) {
+        const auto inner = root.value(QStringLiteral("data")).toObject();
+        if (inner.contains(QStringLiteral("list")))
+            root = inner;
+    }
     auto list = root.value("list").toArray();
     if (list.isEmpty()) return;
 

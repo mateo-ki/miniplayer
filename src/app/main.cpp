@@ -1,5 +1,6 @@
 #include <iostream>
 #include <QApplication>
+#include <QFile>
 #include <QLockFile>
 #include <QLocalSocket>
 #include <QStandardPaths>
@@ -62,10 +63,19 @@ int main(int argc, char *argv[]) {
                 QThread::msleep(50);
             }
         }
-        Logger::instance().info(activationSent
-            ? QStringLiteral("Another MeloBox instance is already running; activation sent")
-            : QStringLiteral("Another MeloBox instance is already running; activation server not ready"));
-        return 0;
+        if (activationSent) {
+            Logger::instance().info(QStringLiteral("Another MeloBox instance is already running; activation sent"));
+            return 0;
+        }
+
+        Logger::instance().warn(QStringLiteral("Stale lock detected with no active instance; recovering"));
+        instanceLock.removeStaleLockFile();
+        const QString lockPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+            + QStringLiteral("/MeloBox.instance.lock");
+        QFile::remove(lockPath);
+        if (!instanceLock.tryLock(500)) {
+            Logger::instance().warn(QStringLiteral("Proceeding despite lock failure"));
+        }
     }
 
     AppBootstrap bootstrap;

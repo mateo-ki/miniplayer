@@ -36,7 +36,7 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             color: root.theme.textPrimaryColor
-                            text: "鎾斁鍘嗗彶璁板綍"
+                            text: "播放历史记录"
                             font.family: root.theme.fontFamily
                             font.pixelSize: root.theme.sectionTitleSize
                             font.bold: true
@@ -72,7 +72,7 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             color: root.theme.textSecondaryColor
-                            text: "娓呯┖"
+                            text: "清空"
                             font.family: root.theme.fontFamily
                             font.pixelSize: root.theme.bodySize
                         }
@@ -166,7 +166,7 @@ Item {
                         anchors.centerIn: parent
                         visible: root.controller.historyModel.count === 0
                         color: root.theme.textMutedColor
-                        text: "鏆傛棤鎾斁鍘嗗彶"
+                        text: "暂无播放历史"
                         font.family: root.theme.fontFamily
                         font.pixelSize: root.theme.bodySize
                     }

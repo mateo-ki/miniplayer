@@ -62,4 +62,58 @@ else()
         message(STATUS "${_melobox_wd_err}")
         message(FATAL_ERROR "windeployqt failed with exit code ${rc}")
     endif()
+
+    # Release CRT 完整集随程序分发 (app-local): libmpv-2.dll 等第三方 DLL
+    # 依赖 vcruntime140/vcruntime140_1/msvcp140 全家桶。windeployqt 只部署
+    # Qt 自己用到的 MSVCP140_1/2, 精简系统缺任一即报"DLL 初始化例程失败"。
+    # 来源与 Debug 分支一致, 取 VS 安装目录的 Redist CRT。
+    set(_melobox_crt_dirs "")
+    foreach(_melobox_vs_root
+            "D:/software/vs/Microsoft Visual Studio/2022"
+            "C:/Program Files/Microsoft Visual Studio/2022"
+            "C:/Program Files (x86)/Microsoft Visual Studio/2022")
+        file(GLOB _melobox_crt_dirs
+            "${_melobox_vs_root}/*/VC/Redist/MSVC/*/x64/Microsoft.VC14*.CRT")
+        if(_melobox_crt_dirs)
+            break()
+        endif()
+    endforeach()
+    if(_melobox_crt_dirs)
+        list(GET _melobox_crt_dirs 0 _melobox_crt_dir)
+        file(GLOB _melobox_crt_dlls
+            "${_melobox_crt_dir}/vcruntime140.dll"
+            "${_melobox_crt_dir}/vcruntime140_1.dll"
+            "${_melobox_crt_dir}/msvcp140.dll"
+            "${_melobox_crt_dir}/msvcp140_1.dll"
+            "${_melobox_crt_dir}/msvcp140_2.dll"
+            "${_melobox_crt_dir}/concrt140.dll")
+        if(_melobox_crt_dlls)
+            file(COPY ${_melobox_crt_dlls} DESTINATION "${MELOBOX_TARGET_FILE_DIR}")
+            list(LENGTH _melobox_crt_dlls _melobox_crt_count)
+            message(STATUS "DeployRuntime: deployed ${_melobox_crt_count} app-local CRT DLLs")
+        endif()
+    else()
+        message(WARNING "DeployRuntime: VC Redist CRT dir not found; app-local CRT not deployed")
+    endif()
+endif()
+
+# windeployqt 部署的是 vcpkg Qt 自带的 d3dcompiler_47.dll (实测 10.0.26100.9168)，
+# 它按新版 UCRT 编译，导入表要求 __CxxFrameHandler4；UCRT 较旧的机器上 mpv 首次
+# 出画加载它就会弹"无法定位程序输入点 ... d3dcompiler_47.dll"。Windows SDK 的
+# D3D redist 版 (10.0.26100.4654) 是静态 CRT，只导入 KERNEL32/ADVAPI32/RPCRT4，
+# 覆盖掉它就不依赖目标机器的 UCRT 版本。redist 目录本身即可再分发授权。
+find_file(MELOBOX_D3DCOMPILER_REDIST
+    NAMES d3dcompiler_47.dll
+    HINTS "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64"
+          "C:/Program Files/Windows Kits/10/Redist/D3D/x64"
+          "C:/Program Files (x86)/Windows Kits/11/Redist/D3D/x64"
+    NO_DEFAULT_PATH
+)
+if(MELOBOX_D3DCOMPILER_REDIST)
+    file(COPY "${MELOBOX_D3DCOMPILER_REDIST}" DESTINATION "${MELOBOX_TARGET_FILE_DIR}")
+    message(STATUS "DeployRuntime: d3dcompiler_47.dll replaced with ${MELOBOX_D3DCOMPILER_REDIST}")
+else()
+    message(WARNING
+        "DeployRuntime: Windows SDK D3D redist d3dcompiler_47.dll not found; "
+        "shipped copy still needs a recent UCRT (old machines will show an entry-point error)")
 endif()

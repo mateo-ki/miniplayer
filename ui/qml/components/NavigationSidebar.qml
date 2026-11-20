@@ -5,30 +5,32 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     width: 64
-    color: appTheme.chromeColor
+    color: theme ? theme.chromeColor : "#141517"
 
     property int currentIndex: 1
     // 播放器内容页可临时与导航高亮页分离，例如动漫播放仍高亮“动漫”。
     property int activePageOverride: -1
     readonly property int activePage: activePageOverride >= 0 ? activePageOverride : currentIndex
     property var theme
+    // 「我的」那一格该不该亮红点：数字由外面喂进来，这里只管画。
+    // 亮不亮都不改行宽，红点是贴在图标右上角的浮层，不占布局。
+    property int unreadBadge: 0
+    // 有可用新版本时在「更新」那一格亮红点
+    property bool updateAvailable: false
+    signal logoClicked()
     readonly property int logoHeight: 56
     readonly property var navItems: [
-        { icon: "\u25b6", label: "\u89c6\u9891", page: 1 },
-        { icon: "🎞", label: "\u52a8\u6f2b", page: 11 },
-        { icon: "🐝", label: "\u871c\u8702", page: 12 },
-        { icon: "📖", label: "\u9605\u8bfb", page: 13 },
-        { icon: "\u25a6", label: "\u77ed\u89c6\u9891", page: 6 },
-        { icon: "\u25ce", label: "\u8d44\u8baf", page: 8 },
-        { icon: "\u25a1", label: "\u56fe\u7247", page: 4 },
-        { icon: "\u266a", label: "\u97f3\u4e50", page: 10 },
-        { icon: "\u263a", label: "\u8868\u60c5", page: 5 },
-        { icon: "\u25c9", label: "\u8bed\u97f3", page: 7 },
-        { icon: "\u2606", label: "\u7ad9\u70b9", page: 9 }
+        { icon: "\uE714", label: "视频", page: 1 },
+        { icon: "\uE8B2", label: "动漫", page: 9 },
+        { icon: "\uEC15", label: "短视频", page: 6 },
+        { icon: "\uEB9F", label: "图片", page: 4 },
+        { icon: "\uE76E", label: "表情", page: 5 },
+        { icon: "\uE720", label: "语音", page: 7 }
     ]
     readonly property var bottomNavItems: [
-        { icon: "\u21ba", label: "\u5386\u53f2", page: 2 },
-        { icon: "\u21e9", label: "\u4e0b\u8f7d", page: 3 }
+        { icon: "\uE777", label: "更新", page: 3 },
+        { icon: "\uE81C", label: "历史", page: 2 },
+        { icon: "\uE779", label: "我的", page: 10 }
     ]
     readonly property real navButtonHeight: Math.max(50, Math.min(62, (height - logoHeight) / (navItems.length + bottomNavItems.length)))
 
@@ -36,29 +38,47 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        // Logo area
+        // Logo area (clickable to view user profile)
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: root.logoHeight
             color: "transparent"
 
             Rectangle {
+                id: logoBox
                 anchors.centerIn: parent
                 width: 38
                 height: 38
                 radius: 10
-                color: theme.surfaceColor
-                border.color: theme.subtleBorderColor
+                color: logoMouse.containsMouse ? (theme ? theme.panelRaisedColor : "#26262c") : (theme ? theme.surfaceColor : "#18181c")
+                border.color: logoMouse.containsMouse ? (theme ? theme.accentColor : "#38bdf8") : (theme ? theme.borderColor : "#2a2a30")
                 border.width: 1
+
+                scale: logoMouse.pressed ? 0.94 : (logoMouse.containsMouse ? 1.06 : 1.0)
+                Behavior on scale { NumberAnimation { duration: 120 } }
+                Behavior on color { ColorAnimation { duration: 150 } }
+                Behavior on border.color { ColorAnimation { duration: 150 } }
 
                 Text {
                     anchors.centerIn: parent
                     text: "M"
-                    color: theme.accentColor
+                    color: theme ? theme.accentColor : "#38bdf8"
                     font.pixelSize: 20
                     font.bold: true
-                    font.family: theme.fontFamily
+                    font.family: theme ? theme.fontFamily : "Segoe UI"
                 }
+
+                MouseArea {
+                    id: logoMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.logoClicked()
+                }
+
+                ToolTip.visible: logoMouse.containsMouse
+                ToolTip.delay: 350
+                ToolTip.text: "个人信息中心 (点击查看)"
             }
         }
 
@@ -97,9 +117,9 @@ Rectangle {
                     height: 44
                     radius: 12
                     color: root.activePage === modelData.page
-                        ? theme.panelRaisedColor
-                        : (bottomMouseArea.containsMouse ? theme.panelColor : "transparent")
-                    border.color: root.activePage === modelData.page ? theme.subtleBorderColor : "transparent"
+                        ? (theme ? theme.sidebarActiveColor : "#202026")
+                        : (bottomMouseArea.containsMouse ? (theme ? theme.panelRaisedColor : "#26262c") : "transparent")
+                    border.color: root.activePage === modelData.page ? (theme ? theme.borderColor : "#2a2a30") : "transparent"
                     border.width: 1
                 }
 
@@ -110,7 +130,9 @@ Rectangle {
                     Text {
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.icon
-                        font.pixelSize: 19
+                        font.family: theme ? theme.iconFontFamily : "Segoe Fluent Icons"
+                        font.pixelSize: 18
+                        renderType: Text.NativeRendering
                         color: root.activePage === modelData.page ? theme.accentColor : theme.textSecondaryColor
                     }
 
@@ -118,7 +140,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.label
                         font.pixelSize: 10
-                        font.family: theme.fontFamily
+                        font.family: theme ? theme.fontFamily : "Segoe UI"
                         color: root.activePage === modelData.page ? theme.accentColor : theme.textMutedColor
                     }
                 }
@@ -162,9 +184,9 @@ Rectangle {
                     height: 44
                     radius: 12
                     color: root.activePage === modelData.page
-                        ? theme.panelRaisedColor
-                        : (mouseArea.containsMouse ? theme.panelColor : "transparent")
-                    border.color: root.activePage === modelData.page ? theme.subtleBorderColor : "transparent"
+                        ? (theme ? theme.sidebarActiveColor : "#202026")
+                        : (mouseArea.containsMouse ? (theme ? theme.panelRaisedColor : "#26262c") : "transparent")
+                    border.color: root.activePage === modelData.page ? (theme ? theme.borderColor : "#2a2a30") : "transparent"
                     border.width: 1
                 }
 
@@ -173,9 +195,12 @@ Rectangle {
                     spacing: 4
 
                     Text {
+                        id: bottomNavIcon
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.icon
-                        font.pixelSize: 19
+                        font.family: theme ? theme.iconFontFamily : "Segoe Fluent Icons"
+                        font.pixelSize: 18
+                        renderType: Text.NativeRendering
                         color: root.activePage === modelData.page ? theme.accentColor : theme.textSecondaryColor
                     }
 
@@ -183,9 +208,25 @@ Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.label
                         font.pixelSize: 10
-                        font.family: theme.fontFamily
+                        font.family: theme ? theme.fontFamily : "Segoe UI"
                         color: root.activePage === modelData.page ? theme.accentColor : theme.textMutedColor
                     }
+                }
+
+                // 贴在图标右上角的浮层：不进 ColumnLayout，所以亮起来那一下整格不会重排。
+                Rectangle {
+                    visible: (modelData.page === 10 && root.unreadBadge > 0)
+                          || (modelData.page === 3 && root.updateAvailable)
+                    width: 9
+                    height: 9
+                    radius: 5
+                    anchors.left: bottomNavIcon.right
+                    anchors.leftMargin: -3
+                    anchors.top: bottomNavIcon.top
+                    anchors.topMargin: -4
+                    color: theme ? theme.dangerColor : "#ef4444"
+                    border.color: theme ? theme.chromeColor : "#141517"
+                    border.width: 1
                 }
             }
         }

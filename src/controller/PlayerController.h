@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QNetworkAccessManager>
 #include <QObject>
 #include <QPointer>
 #include <QHash>
@@ -31,6 +32,13 @@ public:
     enum RepeatMode { NoRepeat, RepeatOne, RepeatAll };
     Q_ENUM(RepeatMode)
 
+    // 片头/片尾跳过判定：每集从头播时跳到片头结束，播到 duration-片尾 时按
+    // "播完"处理走现有 EOF/连播通道。纯函数，便于脱离引擎单测。
+    enum class SkipAction { None, JumpIntro, FinishEpisode };
+    static SkipAction skipAction(qint64 positionMs, qint64 durationMs,
+                                 int introMs, int outroMs,
+                                 bool introDone, bool outroDone);
+
     Q_PROPERTY(bool isPlaying READ isPlaying NOTIFY playbackStateChanged)
     Q_PROPERTY(bool isPaused READ isPaused NOTIFY playbackStateChanged)
     Q_PROPERTY(bool seeking READ seeking NOTIFY seekingChanged)
@@ -39,11 +47,20 @@ public:
     Q_PROPERTY(float volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
     Q_PROPERTY(QString currentFile READ currentFile NOTIFY currentFileChanged)
+    /// 影视（dongpian 系）弹幕：[{id,text,color,timePoint,mode,size}]，与 DanmakuOverlay 兼容
+    Q_PROPERTY(QVariantList videoDanmaku READ videoDanmaku NOTIFY videoDanmakuChanged)
     Q_PROPERTY(int decodedFrames READ decodedFrames NOTIFY timelineChanged)
     Q_PROPERTY(int totalFrames READ totalFrames NOTIFY timelineChanged)
     Q_PROPERTY(int currentIndex READ currentIndex NOTIFY currentIndexChanged)
+    Q_PROPERTY(bool canPlayPrevious READ canPlayPrevious NOTIFY currentIndexChanged)
+    Q_PROPERTY(bool canPlayNext READ canPlayNext NOTIFY currentIndexChanged)
+    Q_PROPERTY(QString previousEpisodeTitle READ previousEpisodeTitle NOTIFY currentIndexChanged)
+    Q_PROPERTY(QString nextEpisodeTitle READ nextEpisodeTitle NOTIFY currentIndexChanged)
+    Q_PROPERTY(QString currentEpisodeTitle READ currentEpisodeTitle NOTIFY currentIndexChanged)
     Q_PROPERTY(float playbackRate READ playbackRate WRITE setPlaybackRate NOTIFY playbackRateChanged)
     Q_PROPERTY(RepeatMode repeatMode READ repeatMode WRITE setRepeatMode NOTIFY repeatModeChanged)
+    Q_PROPERTY(int skipIntroMs READ skipIntroMs WRITE setSkipIntroMs NOTIFY skipMarkersChanged)
+    Q_PROPERTY(int skipOutroMs READ skipOutroMs WRITE setSkipOutroMs NOTIFY skipMarkersChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(bool isNetwork READ isNetwork NOTIFY currentFileChanged)
     Q_PROPERTY(bool isSeekable READ isSeekable NOTIFY currentFileChanged)
@@ -79,9 +96,6 @@ public:
     Q_PROPERTY(bool musicShowRomanization READ musicShowRomanization NOTIFY musicChanged)
     Q_PROPERTY(QString currentMusicLyricSource READ currentMusicLyricSource NOTIFY musicChanged)
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
-    Q_PROPERTY(bool sourceSwitchSuggested READ sourceSwitchSuggested NOTIFY sourceSwitchSuggestionChanged)
-    Q_PROPERTY(QString sourceSwitchReason READ sourceSwitchReason NOTIFY sourceSwitchSuggestionChanged)
-    Q_PROPERTY(QString sourceSwitchCandidate READ sourceSwitchCandidate NOTIFY sourceSwitchSuggestionChanged)
 
 public:
     // services 为组合根持有的功能模型容器，生命周期必须长于本对象。
@@ -95,9 +109,19 @@ public:
     float volume() const;
     bool muted() const;
     QString currentFile() const;
+    QVariantList videoDanmaku() const { return videoDanmaku_; }
+    Q_INVOKABLE void clearVideoDanmaku();
+    void fetchVideoDanmaku(const QString &episodeToken);
     int decodedFrames() const;
     int totalFrames() const;
+    int skipIntroMs() const;
+    int skipOutroMs() const;
     int currentIndex() const;
+    bool canPlayPrevious() const;
+    bool canPlayNext() const;
+    QString previousEpisodeTitle() const;
+    QString nextEpisodeTitle() const;
+    QString currentEpisodeTitle() const;
     float playbackRate() const;
     RepeatMode repeatMode() const;
     bool loading() const;
@@ -135,11 +159,10 @@ public:
     bool musicShowRomanization() const;
     QString currentMusicLyricSource() const;
     QString appVersion() const;
-    bool sourceSwitchSuggested() const;
-    QString sourceSwitchReason() const;
-    QString sourceSwitchCandidate() const;
 
     Q_INVOKABLE void setCurrentVodName(const QString &name);
+    // pool 统一点播源：分集 token -> /api/vod/play 解析直链
+    void resolvePoolPlayUrl(const QString &episodeToken);
     Q_INVOKABLE void downloadCurrentPlaylist();
     Q_INVOKABLE void saveCurrentPlaylistM3u8();
     Q_INVOKABLE void playVideoUrl(const QString &url);
@@ -150,6 +173,13 @@ public:
     Q_INVOKABLE void playShortVideoUrl(const QString &url, const QString &label = QString());
     Q_INVOKABLE void stopShortVideo();
     Q_INVOKABLE void logShortVideoDebug(const QString &message);
+    // 检测/安装 Microsoft VC++ 2015-2022 x64 运行库: libmpv 加载失败且运行库
+    // 缺失时 QML 弹提示, 用户确认后下载官方 vc_redist 静默安装。
+    Q_INVOKABLE static bool isVcRuntimeInstalled();
+    Q_INVOKABLE void installVcRuntime();
+    Q_INVOKABLE void installVcRuntimeFromFile();
+    void runVcRedistInstaller(const QString &installerPath);
+    void notifyVcRuntimeMissing();
     Q_INVOKABLE void playVoice(int sourceIndex = 0);
     // 语音模块取数完成后由播放器播放本地文件（AppServices 信号接线）
     void playLocalAudioFile(const QString &path);
@@ -180,20 +210,23 @@ public:
     Q_INVOKABLE void resetMouseCursor();
     Q_INVOKABLE void pause();
     Q_INVOKABLE void stop();
+    // 应用退出快速关停: 中止播放/管线/代理, 线程等待上限 ~400ms,
+    // 供 aboutToQuit 调用 (stop() 的 3s x3 等待只用于播放切换场景)。
+    Q_INVOKABLE void prepareExit();
     Q_INVOKABLE void seek(qint64 positionMs);
     Q_INVOKABLE void playFromPlaylist(int index);
     Q_INVOKABLE void playFromHistory(int index);
     Q_INVOKABLE void clearPlaybackHistory();
     Q_INVOKABLE void setPlaylistEpisodes(const QVariantList &episodes, int currentIndex);
     Q_INVOKABLE void setPlaybackSources(const QVariantList &sources, int currentSource, int currentEpisode);
-    Q_INVOKABLE void acceptSourceSwitch();
-    Q_INVOKABLE void rejectSourceSwitch();
 
     Q_INVOKABLE void setVolume(float volume);
     Q_INVOKABLE void setMuted(bool muted);
     Q_INVOKABLE void saveScreenshot();
     Q_INVOKABLE void setPlaybackRate(float rate);
     Q_INVOKABLE void setRepeatMode(RepeatMode mode);
+    Q_INVOKABLE void setSkipIntroMs(int ms);
+    Q_INVOKABLE void setSkipOutroMs(int ms);
     Q_INVOKABLE void switchAudioTrack(int streamIndex);
     Q_INVOKABLE void switchSubtitleTrack(int streamIndex);
     Q_INVOKABLE void setSubtitlesEnabled(bool enabled);
@@ -204,6 +237,7 @@ public:
     Q_INVOKABLE void playPrevious();
 
 signals:
+    void videoDanmakuChanged();
     void playbackStateChanged();
     void timelineChanged();
     void seekingChanged();
@@ -212,6 +246,7 @@ signals:
     void currentFileChanged();
     void playbackRateChanged();
     void repeatModeChanged();
+    void skipMarkersChanged();
     void currentIndexChanged();
     void loadingChanged();
     void thumbnailPreviewChanged();
@@ -225,10 +260,12 @@ signals:
     void shortVideoPrefetched(int sourceIndex, const QString &videoUrl, const QString &label);
     void musicChanged();
     void musicLyricIndexChanged();
-    void sourceSwitchSuggestionChanged();
+    void vcRuntimeMissing();
+    void vcInstallStateChanged(const QString &message);
 
 private:
     AppServices *services_ = nullptr;  // 功能模型容器（非持有）
+    QNetworkAccessManager poolNam_;    // pool 统一点播源请求
     PlayerEngine engine_;
     MediaInfoModel mediaInfoModel_;
     PlaylistModel playlistModel_;
@@ -241,12 +278,12 @@ private:
     QTimer *seekWatchdog_ = nullptr;
     QTimer *playbackLoadGuardTimer_ = nullptr;
     QTimer *cursorResetTimer_ = nullptr;
-    QTimer *firstFrameTimer_ = nullptr;
     QPointer<QNetworkReply> hlsFilterReply_;
     HlsPlaylistProxy *hlsPlaylistProxy_ = nullptr;
     QWindow *mpvParentWindow_ = nullptr;
     QWindow *mpvVideoWindow_ = nullptr;
     bool mpvSurfaceVisible_ = true;
+    QString mpvGeometryStamp_;
     bool mpvMode_ = false;
     bool qtNetworkMode_ = false;
     bool userPausedPlayback_ = false;
@@ -263,17 +300,12 @@ private:
     RepeatMode repeatMode_ = NoRepeat;
     int currentIndex_ = -1;
     QString currentFile_;
+    QVariantList videoDanmaku_;
+    QString videoDanmakuToken_;
     QString currentVodName_;
     QVariantList playbackSources_;
     int currentPlaybackSource_ = -1;
     int currentPlaybackEpisode_ = -1;
-    int pendingPlaybackSource_ = -1;
-    bool sourceSwitchSuggested_ = false;
-    QString sourceSwitchReason_;
-    QString sourceSwitchCandidate_;
-    QHash<int, qint64> sourceSuggestionCooldowns_;
-    qint64 pendingSourceSeekMs_ = -1;
-    bool pendingSourcePaused_ = false;
     QString currentShortVideoUrl_;
     QString shortVideoMessage_;
     QString suspendedVideoUrl_;
@@ -292,6 +324,13 @@ private:
     QString currentMusicId_;
     QString currentMusicLrc_;
     QVariantList currentMusicLyricLines_;
+
+    // VC++ 运行库检测/自动安装状态
+    bool vcRuntimePromptShown_ = false;
+    bool vcInstallRunning_ = false;
+    int vcInstallPollCount_ = 0;
+    QString vcInstallerPath_;
+    QTimer vcInstallPollTimer_;
     QVector<qint64> currentMusicLyricTimes_;
     int currentMusicLyricIndex_ = -1;
     int musicLyricOffsetMs_ = 0;
@@ -302,6 +341,11 @@ private:
     QString currentMusicLyricRomanization_;
     quint64 musicSearchSerial_ = 0;
     quint64 musicLyricRequestSerial_ = 0;
+
+    int skipIntroMs_ = 0;
+    int skipOutroMs_ = 0;
+    bool skipIntroDone_ = false;
+    bool skipOutroDone_ = false;
 
     bool opening_ = false;
     bool loading_ = false;
@@ -322,6 +366,7 @@ private:
     void wireEngineSignals();
     void handleEof();
     void finishSeek();
+    void applySkipMarkers();
     void loadSettings();
     void saveSettings();
     void recordPlaybackHistory(const QString &filePath, const QString &title);
@@ -330,11 +375,6 @@ private:
     void loadMusicLyricsForCurrentTrack(bool forceRefresh = false);
     bool loadLocalMusicLyrics();
     static QVariantList parseMusicLyricTrack(const QString &text, const QString &fieldName);
-    int bestAlternativeSource() const;
-    void suggestSourceSwitch(const QString &reason);
-    void clearSourceSwitchSuggestion();
-    void armFirstFrameDetection();
-    void markPlaybackProgress();
     void suspendCurrentVideoForShortVideo();
     void restoreSuspendedVideoAfterShortVideo();
     void applyPendingSuspendedVideoState();

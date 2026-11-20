@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QSettings>
 #include <QStringList>
 
 #include "infrastructure/Logger.h"
@@ -111,7 +112,18 @@ bool MpvBackend::initialize() {
     mpv_set_option_string_(handle_, "terminal", "no");
     mpv_set_option_string_(handle_, "msg-level", "all=warn");
     mpv_set_option_string_(handle_, "vo", "gpu");
-    mpv_set_option_string_(handle_, "hwdec", "auto-safe");
+    // 默认硬解 auto-copy：GPU 解码后拷回内存渲染 —— 笔记本弱 CPU 不卡；
+    // 帧拷贝后不走 GPU 渲染管线，规避驱动差异导致的花屏。
+    // 之前全软解(no)在低端笔记本上明显掉帧，仅保留 QSettings 逃生口：
+    // [playback] hwdec=no 可强制软解。
+    {
+        QSettings settings("MeloBox", "MeloBox");
+        const QString hwdec = settings.value("playback/hwdec", "auto-copy").toString().trimmed();
+        const QByteArray hwdecVal = hwdec.isEmpty() ? QByteArrayLiteral("auto-copy")
+                                                    : hwdec.toUtf8();
+        mpv_set_option_string_(handle_, "hwdec", hwdecVal.constData());
+    }
+    mpv_set_option_string_(handle_, "user-agent", "okhttp/4.12.0");
     mpv_set_option_string_(handle_, "cache", "yes");
     mpv_set_option_string_(handle_, "cache-pause", "yes");
     mpv_set_option_string_(handle_, "cache-pause-initial", "yes");
@@ -141,6 +153,11 @@ bool MpvBackend::initialize() {
     mpv_observe_property_(handle_, 4, "cache-buffering-state", MPV_FORMAT_INT64);
     mpv_observe_property_(handle_, 5, "demuxer-cache-duration", MPV_FORMAT_DOUBLE);
     mpv_observe_property_(handle_, 6, "demuxer-cache-time", MPV_FORMAT_DOUBLE);
+    // 分辨率探针（都是 INT64，避开 STRING 需要 mpv_free_contents 的释放责任）。
+    mpv_observe_property_(handle_, 7, "video-params/w", MPV_FORMAT_INT64);
+    mpv_observe_property_(handle_, 8, "video-params/h", MPV_FORMAT_INT64);
+    mpv_observe_property_(handle_, 9, "video-out-params/w", MPV_FORMAT_INT64);
+    mpv_observe_property_(handle_, 10, "video-out-params/h", MPV_FORMAT_INT64);
 
     pollTimer_.start();
     emit availableChanged();
@@ -223,6 +240,20 @@ void MpvBackend::setSpeed(double speed) {
     if (handle_) mpv_set_property_(handle_, "speed", MPV_FORMAT_DOUBLE, &bounded);
 }
 
+void MpvBackend::logVideoGeometry() {
+    if (srcWidth_ <= 0 || srcHeight_ <= 0 || outWidth_ <= 0 || outHeight_ <= 0)
+        return;
+    const QString stamp = QStringLiteral("%1x%2>%3x%4")
+        .arg(srcWidth_).arg(srcHeight_).arg(outWidth_).arg(outHeight_);
+    if (stamp == loggedVideoGeometry_)
+        return;
+    loggedVideoGeometry_ = stamp;
+    const double ratio = static_cast<double>(outWidth_) / static_cast<double>(srcWidth_);
+    Logger::instance().info(QStringLiteral("[Video] 源 %1x%2 → 画到 %3x%4 (缩放 %5)")
+        .arg(srcWidth_).arg(srcHeight_).arg(outWidth_).arg(outHeight_)
+        .arg(QString::number(ratio, 'f', 2)));
+}
+
 void MpvBackend::pollEvents() {
     if (!handle_) return;
     while (true) {
@@ -251,6 +282,18 @@ void MpvBackend::pollEvents() {
                         : static_cast<double>(positionMs_) + cacheDurationSec_ * 1000.0;
                     emit cacheProgressChanged(qBound(0.0, cachedEndMs / durationMs_, 1.0));
                 }
+            } else if ((name == "video-params/w" || name == "video-params/h"
+                        || name == "video-out-params/w" || name == "video-out-params/h")
+                       && prop->format == MPV_FORMAT_INT64) {
+                if (name == "video-params/w")
+                    srcWidth_ = *static_cast<qint64 *>(prop->data);
+                else if (name == "video-params/h")
+                    srcHeight_ = *static_cast<qint64 *>(prop->data);
+                else if (name == "video-out-params/w")
+                    outWidth_ = *static_cast<qint64 *>(prop->data);
+                else
+                    outHeight_ = *static_cast<qint64 *>(prop->data);
+                logVideoGeometry();
             } else if (name == "demuxer-cache-time" && prop->format == MPV_FORMAT_DOUBLE) {
                 cacheTimeSec_ = *static_cast<double *>(prop->data);
                 if (durationMs_ > 0 && cacheTimeSec_ >= 0.0) {
@@ -259,6 +302,9 @@ void MpvBackend::pollEvents() {
             }
         } else if (event->event_id == MPV_EVENT_START_FILE) {
             ignoreNextEndFile_ = false;
+            // 换片子就把探针读数清掉，不然上一条的尺寸会串到新片子上。
+            srcWidth_ = srcHeight_ = outWidth_ = outHeight_ = 0;
+            loggedVideoGeometry_.clear();
             emit playingChanged(true);
             emit bufferingChanged(false);
         } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
@@ -286,6 +332,14 @@ void MpvBackend::pollEvents() {
             }
             emit bufferingChanged(false);
             emit playingChanged(false);
+            if (reason == 4) {  // MPV_END_FILE_REASON_ERROR: 加载失败(如 URL 已死/网络不可达)
+                Logger::instance().warn(QStringLiteral(
+                    "[ShortVideoDebug][mpv] load failed, endError=%1").arg(endError));
+                // 只发 errorOccurred, 不发 playbackEnded: 加载失败不该触发
+                // "播完自动切下一条", 而应走失败换源路径并给出错误提示。
+                emit errorOccurred(QStringLiteral("视频加载失败(mpv 错误码 %1)").arg(endError));
+                continue;
+            }
             emit playbackEnded();
         } else if (event->event_id == MPV_EVENT_SHUTDOWN) {
             emit bufferingChanged(false);

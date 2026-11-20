@@ -99,7 +99,9 @@ bool AppBootstrap::initialize() {
     registerQmlTypes();
     exposeContextProperties();
     QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, [this]() {
-        m_playerController.stop();
+        // 退出走快速关停路径: stop() 的线程等待 (3s x3 + 缩略图 2s) 会把
+        // 窗口已关后的退出拖到数秒, 用户体验为"退出很慢"。
+        m_playerController.prepareExit();
     });
     if (!loadMainWindow()) {
         Logger::instance().error(QStringLiteral("Main window load failed: no root QML objects"));
@@ -279,6 +281,8 @@ void AppBootstrap::configureEngine() {
     // Register thumbnail image provider
     m_thumbnailProvider = new ThumbnailImageProvider;
     m_engine.addImageProvider("thumbnail", m_thumbnailProvider);
+
+    // 漫画图片代理：带 Referer/UA 下载图床图片
 }
 
 void AppBootstrap::registerQmlTypes() {
@@ -459,6 +463,10 @@ void AppBootstrap::quitApplication() {
 }
 
 bool AppBootstrap::shouldIgnoreShortcut() const {
+    if (!m_services.authController() || !m_services.authController()->isLoggedIn()) {
+        return true;
+    }
+
     QObject *focusObject = QGuiApplication::focusObject();
     if (!focusObject) return false;
 

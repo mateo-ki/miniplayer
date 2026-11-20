@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Midnight Deep Obsidian Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#181e33"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+
+    <!-- Outer Border Cyber Neon Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="45%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+
+    <!-- Core Dynamic Electric Cyan/Sky-Blue Gradient -->
+    <linearGradient id="playGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+
+    <!-- Play Inner Highlight Gradient -->
+    <linearGradient id="playHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f0f9ff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <!-- Ambient Center Radial Glow -->
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.45"/>
+      <stop offset="45%" stop-color="#0284c7" stop-opacity="0.22"/>
+      <stop offset="75%" stop-color="#6366f1" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Outer Subtle Drop Shadow -->
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- Play Button Soft Neon Glow -->
+    <filter id="playGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#0ea5e9" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Rounded Squircle Base with Cyber Rim & Shadow -->
+  <rect x="41" y="26" width="430" height="430" rx="96" fill="url(#bgGrad)" filter="url(#cardShadow)"/>
+  <rect x="41" y="26" width="430" height="430" rx="96" fill="none" stroke="url(#borderGrad)" stroke-width="5" opacity="0.92"/>
+
+  <!-- Concentric Soundwave / Orbit Track -->
+  <circle cx="256" cy="241" r="162" fill="none" stroke="#1e293b" stroke-width="2.5" stroke-dasharray="10 10" opacity="0.5"/>
+  <circle cx="256" cy="241" r="122" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="6 6" opacity="0.4"/>
+
+  <!-- Signature Top Playhead Orbit Arc -->
+  <path d="M 148 147 A 152 152 0 0 1 268 89" fill="none" stroke="#475569" stroke-width="7" stroke-linecap="round" opacity="0.75"/>
+
+  <!-- Glowing Cyan Seek Cross Indicator -->
+  <g transform="translate(162, 130) rotate(42)">
+    <line x1="-12" y1="0" x2="12" y2="0" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
+    <line x1="0" y1="-12" x2="0" y2="12" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="3.5" fill="#ffffff"/>
+  </g>
+
+  <!-- Rich Ambient Glow Behind Play Triangle -->
+  <circle cx="264" cy="241" r="145" fill="url(#centerGlow)"/>
+
+  <!-- Pure Modern Play Triangle (Centered on optical centroid) -->
+  <path d="M 212 149 C 212 137 226 129 236 136 L 358 228 C 367 235 367 247 358 254 L 236 346 C 226 353 212 345 212 333 Z"
+        fill="url(#playGrad)"
+        filter="url(#playGlow)"/>
+
+  <!-- Crisp Inner Triangle Rim Highlight -->
+  <path d="M 212 149 C 212 137 226 129 236 136 L 358 228 C 367 235 367 247 358 254 L 236 346 C 226 353 212 345 212 333 Z"
+        fill="none"
+        stroke="url(#playHighlight)"
+        stroke-width="3"
+        stroke-linejoin="round"/>
+</svg>
