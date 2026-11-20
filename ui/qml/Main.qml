@@ -256,22 +256,26 @@ ApplicationWindow {
         videoFillMode = playerController.uiSetting("videoFillMode", videoFillMode)
         shortVideoPlaybackMode = playerController.uiSetting("shortVideoPlaybackMode", shortVideoPlaybackMode)
         selectedShortVideoSiteIndex = playerController.uiSetting("selectedShortVideoSiteIndex", selectedShortVideoSiteIndex)
-        var savedPage = playerController.uiSetting("currentPage", sidebar.currentIndex)
-        // 旧版页面 0 是首页。首页移除后，将旧设置迁移到视频页。
-        if (savedPage === 0)
+        var rawPage = playerController.uiSetting("currentPage", 1)
+        var savedPage = Number(rawPage)
+        if (isNaN(savedPage) || savedPage < 1)
             savedPage = 1
-        // 资讯(旧 8)与音乐(旧 10)已移除：旧设置正好停在这两页上的回落到视频页，
-        // 其余旧页码按新序平移 (站点 9->8、动漫 11->9、我的 12->10)。
-        if (savedPage === 8 || savedPage === 10)
-            savedPage = 1
-        else if (savedPage === 9)
-            savedPage = 8
-        else if (savedPage === 11)
-            savedPage = 9
-        else if (savedPage === 12)
-            savedPage = 10
-        // 钳制到现有最大页码 (10 = 我的)。
-        sidebar.currentIndex = Math.max(1, Math.min(10, savedPage))
+
+        // 现有有效页码：视频(1), 历史(2), 更新(3), 图片(4), 表情(5), 短视频(6), 语音(7), 动漫(9), 我的(10)
+        var validPages = [1, 2, 3, 4, 5, 6, 7, 9, 10]
+        if (validPages.indexOf(savedPage) !== -1) {
+            // 已在合法集合内，直接使用（动漫9、我的10保留本身，不再错误转换为8）
+            sidebar.currentIndex = savedPage
+        } else if (savedPage === 11) {
+            // 旧版平移兼容：动漫旧11 -> 新9
+            sidebar.currentIndex = 9
+        } else if (savedPage === 12) {
+            // 旧版平移兼容：我的旧12 -> 新10
+            sidebar.currentIndex = 10
+        } else {
+            // 0(旧首页)、8(已废弃站点管理)及其它无效数值一律默认回落到视频页(1)
+            sidebar.currentIndex = 1
+        }
         restoringUiSettings = false
 
         // 弹幕设置(与 videoFillMode 同款持久化)。

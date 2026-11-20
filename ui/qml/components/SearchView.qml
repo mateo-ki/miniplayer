@@ -16,6 +16,8 @@ Rectangle {
     property var activeCategoryPopup: null
     property bool detailActive: false
     property bool siteDropdownOpen: false
+    readonly property int currentSiteIndex: (services && services.apiSiteModel) ? root.currentVideoSiteIndex() : -1
+    readonly property string currentSiteName: (currentSiteIndex >= 0 && services && services.apiSiteModel) ? services.apiSiteModel.nameAt(currentSiteIndex) : "暂无视频站点"
     signal manageSitesRequested()
     signal playbackRequested()
 
@@ -53,7 +55,8 @@ Rectangle {
 
         // Page 0: search results
         ColumnLayout {
-            anchors.fill: parent
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             spacing: 12
 
         // Top bar: site selector + search
@@ -87,7 +90,7 @@ Rectangle {
 
                         Text {
                             Layout.fillWidth: true
-                            text: root.selectedVideoSiteName()
+                            text: root.currentSiteName
                             color: theme.textPrimaryColor
                             font.pixelSize: 12
                             font.family: theme.fontFamily

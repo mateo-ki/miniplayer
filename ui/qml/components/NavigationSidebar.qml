@@ -10,7 +10,20 @@ Rectangle {
     property int currentIndex: 1
     // 播放器内容页可临时与导航高亮页分离，例如动漫播放仍高亮“动漫”。
     property int activePageOverride: -1
-    readonly property int activePage: activePageOverride >= 0 ? activePageOverride : currentIndex
+    function isKnownPage(pageIndex) {
+        for (var i = 0; i < navItems.length; ++i) {
+            if (navItems[i].page === pageIndex) return true;
+        }
+        for (var j = 0; j < bottomNavItems.length; ++j) {
+            if (bottomNavItems[j].page === pageIndex) return true;
+        }
+        return false;
+    }
+    // 兜底防御：若 activePage 处于未知/已删除页码，自动回退到“视频(1)”，确保左侧菜单绝不会出现“全未选中”状态。
+    readonly property int activePage: {
+        var page = activePageOverride >= 0 ? activePageOverride : currentIndex
+        return isKnownPage(page) ? page : 1
+    }
     property var theme
     // 「我的」那一格该不该亮红点：数字由外面喂进来，这里只管画。
     // 亮不亮都不改行宽，红点是贴在图标右上角的浮层，不占布局。
@@ -107,7 +120,7 @@ Rectangle {
                     radius: 2
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    color: theme.accentColor
+                    color: theme ? theme.accentColor : "#38bdf8"
                     visible: root.activePage === modelData.page
                 }
 
@@ -174,11 +187,12 @@ Rectangle {
                     radius: 2
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    color: theme.accentColor
+                    color: theme ? theme.accentColor : "#38bdf8"
                     visible: root.activePage === modelData.page
                 }
 
                 Rectangle {
+                    id: bottomNavBtnBox
                     anchors.centerIn: parent
                     width: 48
                     height: 44
@@ -213,17 +227,17 @@ Rectangle {
                     }
                 }
 
-                // 贴在图标右上角的浮层：不进 ColumnLayout，所以亮起来那一下整格不会重排。
+                // 贴在图标右上角的浮层：挂在 bottomNavBtnBox 边角，避免非法跨组件锚点
                 Rectangle {
                     visible: (modelData.page === 10 && root.unreadBadge > 0)
                           || (modelData.page === 3 && root.updateAvailable)
                     width: 9
                     height: 9
                     radius: 5
-                    anchors.left: bottomNavIcon.right
-                    anchors.leftMargin: -3
-                    anchors.top: bottomNavIcon.top
-                    anchors.topMargin: -4
+                    anchors.right: bottomNavBtnBox.right
+                    anchors.rightMargin: 8
+                    anchors.top: bottomNavBtnBox.top
+                    anchors.topMargin: 4
                     color: theme ? theme.dangerColor : "#ef4444"
                     border.color: theme ? theme.chromeColor : "#141517"
                     border.width: 1

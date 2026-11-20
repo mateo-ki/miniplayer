@@ -109,7 +109,8 @@ Rectangle {
 
         // ── Page 0: 搜索结果 ─────────────────────────────
         ColumnLayout {
-            anchors.fill: parent
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             spacing: 12
 
             // ── 每周更新排播卡片（对标 D:\project\rust\pool） ─────────────────────────────
