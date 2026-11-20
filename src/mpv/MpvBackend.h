@@ -33,6 +33,7 @@ signals:
     void bufferingChanged(bool buffering);
     void cacheProgressChanged(double progress);
     void playbackEnded();
+    void firstFrameReady();
     void errorOccurred(const QString &message);
 
 private:
@@ -55,6 +56,7 @@ private:
         MPV_EVENT_START_FILE = 6,
         MPV_EVENT_END_FILE = 7,
         MPV_EVENT_FILE_LOADED = 8,
+        MPV_EVENT_PLAYBACK_RESTART = 21,
         MPV_EVENT_PROPERTY_CHANGE = 22
     };
 

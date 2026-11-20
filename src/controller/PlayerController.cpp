@@ -207,12 +207,21 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
                 finishSeek();
             }
         }
-        if (loading_ && isPlaying_ && position > 0) {
+        if (position > 0) {
+            hasFirstFrame_ = true;
+        }
+        if (loading_ && isPlaying_ && hasFirstFrame_) {
             setLoading(false);
         }
         positionMs_ = position;
         applyPendingSuspendedVideoState();
         emit timelineChanged();
+    });
+    connect(&mpvBackend_, &MpvBackend::firstFrameReady, this, [this]() {
+        if (!mpvMode_) return;
+        hasFirstFrame_ = true;
+        setLoading(false);
+        updateMpvVideoWindowVisibility();
     });
     connect(&mpvBackend_, &MpvBackend::durationChanged, this, [this](qint64 duration) {
         if (!mpvMode_) return;
@@ -233,8 +242,10 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
     connect(&mpvBackend_, &MpvBackend::bufferingChanged, this, [this](bool buffering) {
         if (!mpvMode_) return;
         mpvBuffering_ = buffering;
-        if (!buffering || !isPlaying_) {
-            setLoading(buffering);
+        if (buffering) {
+            setLoading(true);
+        } else if (hasFirstFrame_) {
+            setLoading(false);
         }
     });
     connect(&mpvBackend_, &MpvBackend::cacheProgressChanged, this, [this](double progress) {
@@ -250,6 +261,7 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
             .arg(durationMs_)
             .arg(loading_)
             .arg(isPlaying_));
+        hasFirstFrame_ = false;
         setLoading(false);
         mpvBuffering_ = false;
         userPausedPlayback_ = false;
@@ -267,11 +279,15 @@ PlayerController::PlayerController(AppServices *services, QObject *parent)
         const bool shortVideoFailed = !currentShortVideoUrl_.isEmpty()
             && currentFile_ == currentShortVideoUrl_;
        if (mpvMode_) {
+            hasFirstFrame_ = false;
             setLoading(false);
             mpvBuffering_ = false;
             mpvPlaybackFinished_ = true;
             isPlaying_ = false;
             isPaused_ = false;
+            if (mpvVideoWindow_) {
+                mpvVideoWindow_->hide();
+            }
             updateMpvVideoWindowVisibility();
             emit playbackStateChanged();
        }
@@ -581,9 +597,18 @@ void PlayerController::stop() {
     cancelHlsFilterRequest();
     removeSanitizedHlsPlaylist();
     userPausedPlayback_ = false;
+    endHoldSpeed();
+    pendingSeekDeltaMs_ = 0;
+    if (seekDebounceTimer_)
+        seekDebounceTimer_->stop();
     if (hlsPlaylistProxy_)
         hlsPlaylistProxy_->stop();
     mpvBuffering_ = false;
+    hasFirstFrame_ = false;
+    setLoading(false);
+    if (mpvVideoWindow_) {
+        mpvVideoWindow_->hide();
+    }
     if (mpvMode_) {
         mpvBackend_.stop();
         mpvMode_ = false;
@@ -674,6 +699,48 @@ void PlayerController::setPlaybackRate(float rate) {
     }
     Logger::instance().info("Playback rate changed to " + QString::number(rate, 'f', 2));
     emit playbackRateChanged();
+}
+
+void PlayerController::beginHoldSpeed() {
+    if (holdSpeedActive_ || currentFile_.isEmpty()) return;
+    rateBeforeHold_ = playbackRate_;
+    holdSpeedActive_ = true;
+    setPlaybackRate(3.0f);
+    Logger::instance().info("Long press: speed up to 3.0x");
+    emit holdSpeedActiveChanged();
+}
+
+void PlayerController::endHoldSpeed() {
+    if (!holdSpeedActive_) return;
+    holdSpeedActive_ = false;
+    setPlaybackRate(rateBeforeHold_);
+    Logger::instance().info(QStringLiteral("Long press ended: restored speed to %1x").arg(rateBeforeHold_));
+    emit holdSpeedActiveChanged();
+}
+
+void PlayerController::seekRelative(qint64 deltaMs) {
+    if (durationMs_ <= 0) return;
+
+    if (!seekDebounceTimer_) {
+        seekDebounceTimer_ = new QTimer(this);
+        seekDebounceTimer_->setSingleShot(true);
+        seekDebounceTimer_->setInterval(250);
+        connect(seekDebounceTimer_, &QTimer::timeout, this, [this]() {
+            if (durationMs_ <= 0) {
+                pendingSeekDeltaMs_ = 0;
+                return;
+            }
+            const qint64 target = qBound<qint64>(0, positionMs_ + pendingSeekDeltaMs_, durationMs_);
+            pendingSeekDeltaMs_ = 0;
+            seek(target);
+        });
+    }
+
+    pendingSeekDeltaMs_ += deltaMs;
+    const qint64 previewTarget = qBound<qint64>(0, positionMs_ + pendingSeekDeltaMs_, durationMs_);
+    seekDebounceTimer_->start();
+
+    emit seekFeedbackRequested(pendingSeekDeltaMs_, previewTarget, durationMs_);
 }
 
 void PlayerController::setRepeatMode(RepeatMode mode) {
@@ -895,6 +962,17 @@ void PlayerController::setMpvWindowId(qint64 windowId) {
     Logger::instance().info("mpv parent window id set: " + QString::number(windowId));
 }
 
+#ifdef Q_OS_WIN
+static WNDPROC s_originalMpvWndProc = nullptr;
+
+static LRESULT CALLBACK MpvChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_NCHITTEST) {
+        return HTTRANSPARENT;
+    }
+    return CallWindowProc(s_originalMpvWndProc, hwnd, msg, wParam, lParam);
+}
+#endif
+
 void PlayerController::ensureMpvVideoWindow() {
     if (mpvVideoWindow_ || !mpvParentWindow_) return;
 
@@ -902,6 +980,21 @@ void PlayerController::ensureMpvVideoWindow() {
     mpvVideoWindow_->setFlags(Qt::FramelessWindowHint);
     mpvVideoWindow_->resize(1, 1);
     mpvVideoWindow_->hide();
+
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(mpvVideoWindow_->winId());
+    SetClassLongPtr(hwnd,
+                    GCLP_HBRBACKGROUND,
+                    reinterpret_cast<LONG_PTR>(GetStockObject(BLACK_BRUSH)));
+
+    LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
+
+    if (!s_originalMpvWndProc) {
+        s_originalMpvWndProc = reinterpret_cast<WNDPROC>(
+            SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MpvChildWndProc)));
+    }
+#endif
 
     mpvBackend_.setWindowId(static_cast<qint64>(mpvVideoWindow_->winId()));
     Logger::instance().info("mpv video child window id set: "
@@ -940,7 +1033,7 @@ void PlayerController::refreshMpvVideoWindow() {
     ensureMpvVideoWindow();
     if (!mpvVideoWindow_) return;
     updateMpvVideoWindowVisibility();
-    if (mpvSurfaceVisible_ && mpvMode_ && !loading_ && !mpvPlaybackFinished_ && !currentFile_.isEmpty()) {
+    if (mpvSurfaceVisible_ && mpvMode_ && !loading_ && hasFirstFrame_ && !mpvPlaybackFinished_ && !currentFile_.isEmpty()) {
         mpvVideoWindow_->show();
         mpvVideoWindow_->raise();
     }
@@ -971,7 +1064,7 @@ void PlayerController::setPlaybackSources(const QVariantList &sources, int curre
 
 void PlayerController::updateMpvVideoWindowVisibility() {
     if (!mpvVideoWindow_) return;
-    if (mpvSurfaceVisible_ && mpvMode_ && !loading_ && !mpvPlaybackFinished_ && !currentFile_.isEmpty()) {
+    if (mpvSurfaceVisible_ && mpvMode_ && !loading_ && hasFirstFrame_ && !mpvPlaybackFinished_ && !currentFile_.isEmpty()) {
         mpvVideoWindow_->show();
     } else {
         mpvVideoWindow_->hide();
@@ -1202,7 +1295,11 @@ void PlayerController::preparePlaybackTarget(const QString &displayUrl) {
     skipOutroDone_ = false;
     mpvBufferProgress_ = 0.0;
     mpvBuffering_ = false;
+    hasFirstFrame_ = false;
     setLoading(true);
+    if (mpvVideoWindow_) {
+        mpvVideoWindow_->hide();
+    }
     emit currentFileChanged();
     emit timelineChanged();
 }

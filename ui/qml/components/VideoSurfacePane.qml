@@ -12,6 +12,8 @@ Rectangle {
     property string currentFileTitle: ""
     property string emptyTitle: "请选择视频播放"
     property string emptySubtitle: "请从视频菜单选择内容"
+    property string loadingTitle: "视频加载中"
+    property string loadingSubtitle: "正在连接资源与缓冲，请稍候"
 
     signal doubleClicked()
     signal pressAndHoldStarted()
@@ -56,6 +58,8 @@ Rectangle {
         acceptedButtons: Qt.LeftButton
         hoverEnabled: true
         focus: false
+        pressAndHoldInterval: 450
+        preventStealing: true
         onPositionChanged: function(mouse) {
             root.pointerMoved(mouse.y, height)
         }
@@ -64,6 +68,7 @@ Rectangle {
         onDoubleClicked: root.doubleClicked()
         onPressAndHold: {
             holding = true
+            playerController.beginHoldSpeed()
             root.pressAndHoldStarted()
         }
         onWheel: function(event) {
@@ -76,12 +81,14 @@ Rectangle {
         onReleased: {
             if (holding) {
                 holding = false
+                playerController.endHoldSpeed()
                 root.pressAndHoldEnded()
             }
         }
         onCanceled: {
             if (holding) {
                 holding = false
+                playerController.endHoldSpeed()
                 root.pressAndHoldEnded()
             }
         }
@@ -137,57 +144,192 @@ Rectangle {
 
     // Loading overlay
     Rectangle {
+        id: loadingOverlay
         anchors.fill: parent
-        color: "#cc0b0f15"
+        anchors.margins: 1
+        radius: root.radius - 1
+        color: "#0a0b10"
         visible: root.loading
         z: 100
 
+        // Deep cinema gradient
+        Rectangle {
+            anchors.fill: parent
+            radius: parent.radius
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#0f121a" }
+                GradientStop { position: 0.5; color: "#0a0b10" }
+                GradientStop { position: 1.0; color: "#06070a" }
+            }
+        }
+
         Column {
             anchors.centerIn: parent
-            spacing: 12
+            spacing: 16
 
-            // Spinning indicator
-            Rectangle {
-                width: 44
-                height: 44
-                radius: 22
+            // Center Animated Loading Indicator
+            Item {
+                width: 64
+                height: 64
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: "transparent"
-                border.color: root.theme ? root.theme.accentColor : "#10b981"
-                border.width: 3
 
+                // Outer Track Ring
                 Rectangle {
-                    width: 20
-                    height: 3
-                    anchors.verticalCenter: parent.top
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    color: root.theme ? root.theme.accentColor : "#10b981"
-                    transformOrigin: Item.Bottom
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: "transparent"
+                    border.color: Qt.rgba(1, 1, 1, 0.08)
+                    border.width: 3
+                }
+
+                // Outer Rotating Glowing Arc
+                Item {
+                    id: outerSpinner
+                    anchors.fill: parent
+
+                    Rectangle {
+                        width: 18
+                        height: 3
+                        radius: 1.5
+                        anchors.top: parent.top
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        color: root.theme ? root.theme.accentColor : "#38bdf8"
+                    }
 
                     NumberAnimation on rotation {
                         from: 0
                         to: 360
-                        duration: 800
+                        duration: 1100
                         loops: Animation.Infinite
+                        running: root.loading
+                    }
+                }
+
+                // Inner Counter-Rotating Ring
+                Item {
+                    id: innerSpinner
+                    width: 44
+                    height: 44
+                    anchors.centerIn: parent
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        color: "transparent"
+                        border.color: Qt.rgba(1, 1, 1, 0.05)
+                        border.width: 2
+                    }
+
+                    Rectangle {
+                        width: 12
+                        height: 2
+                        radius: 1
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        color: root.theme ? (root.theme.accentHoverColor || root.theme.accentColor) : "#60a5fa"
+                    }
+
+                    NumberAnimation on rotation {
+                        from: 360
+                        to: 0
+                        duration: 1600
+                        loops: Animation.Infinite
+                        running: root.loading
+                    }
+                }
+
+                // Center Pulsing Core Dot
+                Rectangle {
+                    id: centerPulseDot
+                    width: 10
+                    height: 10
+                    radius: 5
+                    anchors.centerIn: parent
+                    color: root.theme ? root.theme.accentColor : "#38bdf8"
+
+                    SequentialAnimation on scale {
+                        loops: Animation.Infinite
+                        running: root.loading
+                        NumberAnimation { from: 0.8; to: 1.25; duration: 800; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 1.25; to: 0.8; duration: 800; easing.type: Easing.InOutQuad }
+                    }
+
+                    SequentialAnimation on opacity {
+                        loops: Animation.Infinite
+                        running: root.loading
+                        NumberAnimation { from: 0.45; to: 1.0; duration: 800; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 1.0; to: 0.45; duration: 800; easing.type: Easing.InOutQuad }
                     }
                 }
             }
 
-            Text {
+            // Primary Label with animated pulsing dots
+            Row {
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: root.theme ? root.theme.textPrimaryColor : "#f3f3f3"
-                text: "正在缓冲视频..."
-                font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                font.pixelSize: root.theme ? root.theme.bodySize : 13
-                font.bold: true
+                spacing: 2
+
+                Text {
+                    text: root.loadingTitle || "视频加载中"
+                    color: root.theme ? root.theme.textPrimaryColor : "#f3f4f6"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: 15
+                    font.bold: true
+                }
+
+                Text {
+                    text: "..."
+                    color: root.theme ? root.theme.accentColor : "#38bdf8"
+                    font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
+                    font.pixelSize: 15
+                    font.bold: true
+
+                    SequentialAnimation on opacity {
+                        loops: Animation.Infinite
+                        running: root.loading
+                        NumberAnimation { from: 0.25; to: 1.0; duration: 600 }
+                        NumberAnimation { from: 1.0; to: 0.25; duration: 600 }
+                    }
+                }
             }
 
+            // Secondary Subtitle
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                color: root.theme ? root.theme.textMutedColor : "#858585"
-                text: "缓存足够后自动播放"
+                color: root.theme ? root.theme.textMutedColor : "#9ca3af"
+                text: root.loadingSubtitle || "精彩即将呈现，请稍候"
                 font.family: root.theme ? root.theme.fontFamily : "Segoe UI"
-                font.pixelSize: root.theme ? root.theme.captionSize : 11
+                font.pixelSize: 12
+            }
+
+            // Stream Shimmer Track Bar
+            Rectangle {
+                width: 140
+                height: 3
+                radius: 1.5
+                color: "#181f2a"
+                anchors.horizontalCenter: parent.horizontalCenter
+                clip: true
+
+                Rectangle {
+                    width: 50
+                    height: 3
+                    radius: 1.5
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: "transparent" }
+                        GradientStop { position: 0.5; color: root.theme ? root.theme.accentColor : "#38bdf8" }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+
+                    NumberAnimation on x {
+                        from: -50
+                        to: 140
+                        duration: 1500
+                        loops: Animation.Infinite
+                        running: root.loading
+                        easing.type: Easing.InOutQuad
+                    }
+                }
             }
         }
     }

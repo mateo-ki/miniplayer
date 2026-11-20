@@ -58,6 +58,7 @@ public:
     Q_PROPERTY(QString nextEpisodeTitle READ nextEpisodeTitle NOTIFY currentIndexChanged)
     Q_PROPERTY(QString currentEpisodeTitle READ currentEpisodeTitle NOTIFY currentIndexChanged)
     Q_PROPERTY(float playbackRate READ playbackRate WRITE setPlaybackRate NOTIFY playbackRateChanged)
+    Q_PROPERTY(bool holdSpeedActive READ holdSpeedActive NOTIFY holdSpeedActiveChanged)
     Q_PROPERTY(RepeatMode repeatMode READ repeatMode WRITE setRepeatMode NOTIFY repeatModeChanged)
     Q_PROPERTY(int skipIntroMs READ skipIntroMs WRITE setSkipIntroMs NOTIFY skipMarkersChanged)
     Q_PROPERTY(int skipOutroMs READ skipOutroMs WRITE setSkipOutroMs NOTIFY skipMarkersChanged)
@@ -235,6 +236,10 @@ public:
     void setLoading(bool loading);
     Q_INVOKABLE void playNext();
     Q_INVOKABLE void playPrevious();
+    bool holdSpeedActive() const { return holdSpeedActive_; }
+    Q_INVOKABLE void beginHoldSpeed();
+    Q_INVOKABLE void endHoldSpeed();
+    Q_INVOKABLE void seekRelative(qint64 deltaMs);
 
 signals:
     void videoDanmakuChanged();
@@ -245,6 +250,8 @@ signals:
     void mutedChanged();
     void currentFileChanged();
     void playbackRateChanged();
+    void holdSpeedActiveChanged();
+    void seekFeedbackRequested(qint64 deltaMs, qint64 targetMs, qint64 durationMs);
     void repeatModeChanged();
     void skipMarkersChanged();
     void currentIndexChanged();
@@ -289,6 +296,7 @@ private:
     bool userPausedPlayback_ = false;
     bool mpvPlaybackFinished_ = false;
     bool mpvBuffering_ = false;
+    bool hasFirstFrame_ = false;
     bool isPlaying_ = false;
     bool isPaused_ = false;
     bool seeking_ = false;
@@ -297,6 +305,10 @@ private:
     float volume_ = 1.0f;
     bool muted_ = false;
     float playbackRate_ = 1.0f;
+    bool holdSpeedActive_ = false;
+    float rateBeforeHold_ = 1.0f;
+    QTimer *seekDebounceTimer_ = nullptr;
+    qint64 pendingSeekDeltaMs_ = 0;
     RepeatMode repeatMode_ = NoRepeat;
     int currentIndex_ = -1;
     QString currentFile_;

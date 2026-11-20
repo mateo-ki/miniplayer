@@ -200,6 +200,15 @@ bool AppBootstrap::eventFilter(QObject *watched, QEvent *event) {
         m_playerController.resetMouseCursor();
     }
 
+    if (event->type() == QEvent::KeyRelease) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Right && m_playerController.holdSpeedActive()) {
+            m_playerController.endHoldSpeed();
+            keyEvent->accept();
+            return true;
+        }
+    }
+
     if (event->type() != QEvent::KeyPress) {
         return QObject::eventFilter(watched, event);
     }
@@ -227,7 +236,19 @@ bool AppBootstrap::nativeEventFilter(const QByteArray &eventType, void *message,
 
 #ifdef Q_OS_WIN
     auto *msg = static_cast<MSG *>(message);
-    if (!msg || (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)) {
+    if (!msg) {
+        return false;
+    }
+
+    if (msg->message == WM_KEYUP || msg->message == WM_SYSKEYUP) {
+        if (msg->wParam == VK_RIGHT && m_playerController.holdSpeedActive()) {
+            m_playerController.endHoldSpeed();
+            return true;
+        }
+        return false;
+    }
+
+    if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN) {
         return false;
     }
 
@@ -521,12 +542,19 @@ bool AppBootstrap::handleShortcutKey(int key, bool autoRepeat) {
         }
         return true;
     case Qt::Key_Left:
-        Logger::instance().info("Keyboard shortcut: Left");
-        seekRelative(-5000);
+        Logger::instance().info("Keyboard shortcut: Left (rewind)");
+        m_playerController.seekRelative(-5000);
         return true;
     case Qt::Key_Right:
-        Logger::instance().info("Keyboard shortcut: Right");
-        seekRelative(5000);
+        if (autoRepeat) {
+            if (!m_playerController.holdSpeedActive()) {
+                Logger::instance().info("Keyboard shortcut: Right hold -> speed up");
+                m_playerController.beginHoldSpeed();
+            }
+        } else {
+            Logger::instance().info("Keyboard shortcut: Right (fast-forward)");
+            m_playerController.seekRelative(5000);
+        }
         return true;
     case Qt::Key_BracketLeft:
         adjustVolume(-0.05f);

@@ -85,6 +85,7 @@ ApplicationWindow {
     property bool mediaBrowserOpening: false
     property bool videoBrowserActive: true
     property bool animePlaybackActive: false
+    property bool videoResolving: false
     property int animePlaybackVodId: 0
     property bool animeCommentsDrawerOpen: false
     property bool animeEpisodesOpen: false
@@ -529,6 +530,7 @@ ApplicationWindow {
     function prepareAnimePlayback(part, resolveEpisode) {
         var title = String(part || "").trim()
         if (!title) return
+        window.videoResolving = true
         window.animeCurrentEpisode = title
         window.animePlaybackVodId = animePage.model.detail.vodId || animePage.selectedVodId
         window.setAnimePlaybackPlaylist(window.animePlaybackVodId, title)
@@ -663,6 +665,7 @@ ApplicationWindow {
     Connections {
         target: services.dmghgAnimeModel
         function onEpisodeResolved(url, title, message) {
+            window.videoResolving = false
             if (url && url.length > 0) {
                 if (title && title.length > 0)
                     window.animeCurrentEpisode = title
@@ -868,26 +871,31 @@ ApplicationWindow {
     }
 
     function beginHoldSpeed() {
-        if (holdSpeedActive || playerController.currentFile.length === 0)
+        if (playerController.currentFile.length === 0)
             return
-        playbackRateBeforeHold = playerController.playbackRate
-        holdSpeedActive = true
+        playerController.beginHoldSpeed()
         playbackGestureFeedbackTimer.stop()
         playbackGestureFeedbackVisible = false
-        playerController.setPlaybackRate(3.0)
         holdSpeedIndicatorWindow.raise()
     }
 
     function endHoldSpeed() {
-        if (!holdSpeedActive)
-            return
-        holdSpeedActive = false
-        playerController.setPlaybackRate(playbackRateBeforeHold)
+        playerController.endHoldSpeed()
     }
 
     function seekRelative(deltaMs) {
-        seekAccum += deltaMs
-        seekDebounceTimer.restart()
+        playerController.seekRelative(deltaMs)
+    }
+
+    function formatSeekTime(ms) {
+        if (!ms || ms < 0) return "00:00"
+        var totalSec = Math.floor(ms / 1000)
+        var h = Math.floor(totalSec / 3600)
+        var mm = Math.floor((totalSec % 3600) / 60)
+        var ss = totalSec % 60
+        var m2 = (mm < 10 ? "0" + mm : "" + mm)
+        var s2 = (ss < 10 ? "0" + ss : "" + ss)
+        return h > 0 ? h + ":" + m2 + ":" + s2 : m2 + ":" + s2
     }
 
     property bool volumeFeedbackVisible: false
@@ -1131,11 +1139,13 @@ ApplicationWindow {
                 // 滚轮不再调音量，改用键盘 [ / ] 和方向键 Up/Down 调整。
                 onPlaybackRequested: {
                     // 影视开播：清掉可能残留的动漫播放标记，否则动漫弹幕会盖在影视画面上
+                    window.videoResolving = false
                     window.animePlaybackActive = false
                     window.videoBrowserActive = false
                     window.bottomControlReveal = false
                 }
                 onReturnToDetailRequested: {
+                    window.videoResolving = false
                     playerController.stop()
                     if (window.visibility === Window.FullScreen)
                         window.visibility = Window.Windowed
@@ -1231,6 +1241,7 @@ ApplicationWindow {
                 theme: appTheme
                 sidebar: sidebar
                 onEpisodeRequested: function(part) {
+                    window.videoResolving = true
                     window.animeCurrentEpisode = part || ""
                     window.animeEpisodesOpen = false
                     animeEpisodesWindow.close()
@@ -1517,6 +1528,18 @@ ApplicationWindow {
         }
     }
 
+    property bool seekFeedbackVisible: false
+    property real seekFeedbackDelta: 0
+    property real seekFeedbackTargetMs: 0
+    property real seekFeedbackDurationMs: 0
+
+    Timer {
+        id: seekFeedbackHideTimer
+        interval: 1000
+        repeat: false
+        onTriggered: window.seekFeedbackVisible = false
+    }
+
     Timer {
         id: playbackGestureFeedbackTimer
         interval: 700
@@ -1527,15 +1550,18 @@ ApplicationWindow {
     // Top-level feedback remains visible above the native mpv video window.
     Window {
         id: holdSpeedIndicatorWindow
-        width: window.holdSpeedActive ? 144 : 72
-        height: window.holdSpeedActive ? 82 : 64
+        width: (window.holdSpeedActive || playerController.holdSpeedActive) ? 148
+             : (window.seekFeedbackVisible ? 180 : 72)
+        height: (window.holdSpeedActive || playerController.holdSpeedActive) ? 84
+              : (window.seekFeedbackVisible ? 72 : 64)
         x: window.x + (sidebar.visible ? sidebar.width : 0)
             + (window.width - (sidebar.visible ? sidebar.width : 0) - width) / 2
         y: window.y + (window.height - height) / 2
-        // 仅在点击反馈、长按倍速或鼠标停留在反馈按钮上时可见。
+        // 仅在点击反馈、长按倍速、快进快退或鼠标停留在反馈按钮上时可见。
         visible: window.visible && window.playerPageActive
             && !window.videoBrowserVisible && playerController.currentFile.length > 0
-            && (window.holdSpeedActive
+            && (window.holdSpeedActive || playerController.holdSpeedActive
+                || window.seekFeedbackVisible
                 || window.playbackGestureFeedbackVisible)
         // 暂停/播放提示需要能被点击，因此不能使用 WindowTransparentForInput。
         flags: Qt.Tool | Qt.FramelessWindowHint
@@ -1546,37 +1572,94 @@ ApplicationWindow {
         Rectangle {
             id: playbackFeedbackBackground
             anchors.fill: parent
-            radius: window.holdSpeedActive ? 10 : 6
-            // 暂停提示默认只有图标；悬停时显示小块半透明白色反馈，不使用圆形背景。
-            color: "transparent"
-            border.color: "transparent"
-            border.width: 0
+            radius: 12
+            color: (window.holdSpeedActive || playerController.holdSpeedActive || window.seekFeedbackVisible)
+                ? "#e60f172a"
+                : (playbackFeedbackMouse.containsMouse ? "#4dffffff" : "transparent")
+            border.color: (window.holdSpeedActive || playerController.holdSpeedActive || window.seekFeedbackVisible)
+                ? "#3338bdf8"
+                : "transparent"
+            border.width: (window.holdSpeedActive || playerController.holdSpeedActive || window.seekFeedbackVisible) ? 1.5 : 0
 
             MouseArea {
                 id: playbackFeedbackMouse
                 anchors.fill: parent
-                enabled: !window.holdSpeedActive
+                enabled: !window.holdSpeedActive && !playerController.holdSpeedActive && !window.seekFeedbackVisible
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: window.togglePlayPause()
             }
 
+            // 1. Hold Speed Feedback (长按加速)
             Column {
                 anchors.centerIn: parent
-                spacing: window.holdSpeedActive ? 2 : 5
+                spacing: 3
+                visible: window.holdSpeedActive || playerController.holdSpeedActive
 
                 Text {
-                    visible: window.holdSpeedActive
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "3×"
-                    color: "#e6ffffff"
+                    text: "3.0×"
+                    color: appTheme.accentColor || "#38bdf8"
                     font.family: appTheme.fontFamily
-                    font.pixelSize: 32
-                    font.bold: window.holdSpeedActive
+                    font.pixelSize: 28
+                    font.bold: true
                 }
 
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "倍速播放中 >>>"
+                    color: "#f1f5f9"
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+            }
+
+            // 2. Seek Feedback (快进 / 快退)
+            Column {
+                anchors.centerIn: parent
+                spacing: 4
+                visible: !window.holdSpeedActive && !playerController.holdSpeedActive && window.seekFeedbackVisible
+
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 6
+
+                    Text {
+                        text: window.seekFeedbackDelta > 0 ? "▶▶" : "◀◀"
+                        color: appTheme.accentColor || "#38bdf8"
+                        font.pixelSize: 16
+                        font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                        text: (window.seekFeedbackDelta > 0 ? "快进 +" : "快退 -")
+                            + Math.round(Math.abs(window.seekFeedbackDelta) / 1000) + "秒"
+                        color: "#ffffff"
+                        font.family: appTheme.fontFamily
+                        font.pixelSize: 15
+                        font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: window.formatSeekTime(window.seekFeedbackTargetMs) + " / " + window.formatSeekTime(window.seekFeedbackDurationMs)
+                    color: "#94a3b8"
+                    font.family: appTheme.fontFamily
+                    font.pixelSize: 11
+                }
+            }
+
+            // 3. Play/Pause feedback
+            Column {
+                anchors.centerIn: parent
+                spacing: 5
+                visible: !window.holdSpeedActive && !playerController.holdSpeedActive && !window.seekFeedbackVisible && window.playbackGestureFeedbackVisible
+
                 Item {
-                    visible: !window.holdSpeedActive
                     width: 28
                     height: 34
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -1602,9 +1685,7 @@ ApplicationWindow {
 
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: window.holdSpeedActive
-                        ? "倍速播放"
-                        : window.playbackGestureFeedbackText
+                    text: window.playbackGestureFeedbackText
                     color: "#d9ffffff"
                     font.family: appTheme.fontFamily
                     font.pixelSize: 12
@@ -1621,6 +1702,19 @@ ApplicationWindow {
             window.volumeFeedbackVolume = playerController.volume
             window.volumeFeedbackVisible = true
             volumeFeedbackTimer.restart()
+        }
+        function onSeekFeedbackRequested(deltaMs, targetMs, durationMs) {
+            window.seekFeedbackDelta = deltaMs
+            window.seekFeedbackTargetMs = targetMs
+            window.seekFeedbackDurationMs = durationMs
+            window.seekFeedbackVisible = true
+            seekFeedbackHideTimer.restart()
+            holdSpeedIndicatorWindow.raise()
+        }
+        function onHoldSpeedActiveChanged() {
+            if (playerController.holdSpeedActive) {
+                holdSpeedIndicatorWindow.raise()
+            }
         }
     }
 

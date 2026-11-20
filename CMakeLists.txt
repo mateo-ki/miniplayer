@@ -15,7 +15,7 @@ option(MELOBOX_BUNDLE_MPV "Bundle libmpv runtime in packaged builds" ON)
 option(MELOBOX_ENABLE_RUNTIME_DEPLOYMENT "Run Qt/vcpkg runtime deployment after building" OFF)
 set(MELOBOX_FFMPEG_PROVIDER "auto" CACHE STRING "FFmpeg discovery strategy: auto or custom-cache")
 set_property(CACHE MELOBOX_FFMPEG_PROVIDER PROPERTY STRINGS auto custom-cache)
-set(MELOBOX_APP_VERSION "1.2.8" CACHE STRING "MeloBox application version shown in the UI and update checks")
+set(MELOBOX_APP_VERSION "1.2.9" CACHE STRING "MeloBox application version shown in the UI and update checks")
 set(MELOBOX_UPDATE_OWNER "" CACHE STRING "GitHub owner used by the built-in updater")
 set(MELOBOX_UPDATE_REPO "" CACHE STRING "GitHub repository used by the built-in updater")
 

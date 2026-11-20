@@ -57,7 +57,9 @@ Item {
         theme: root.theme
         currentFileTitle: root.controller.currentFile
         emptyState: root.controller.currentFile.length === 0
-        loading: root.controller.seeking
+            && !(root.hostWindow && (root.hostWindow.animePlaybackActive || root.hostWindow.videoResolving))
+        loading: (root.hostWindow && (root.hostWindow.videoResolving || (root.hostWindow.animePlaybackActive && root.controller.positionMs <= 0)))
+            || root.controller.seeking
             || (root.controller.loading && root.controller.positionMs <= 0)
             || (root.controller.isPlaying && root.controller.positionMs <= 0
                 && root.controller.durationMs <= 0)

@@ -132,6 +132,9 @@ bool MpvBackend::initialize() {
     mpv_set_option_string_(handle_, "demuxer-max-bytes", "512MiB");
     mpv_set_option_string_(handle_, "demuxer-readahead-secs", "180");
     mpv_set_option_string_(handle_, "hr-seek", "yes");
+    mpv_set_option_string_(handle_, "background-color", "#000000");
+    mpv_set_option_string_(handle_, "keep-open", "yes");
+    mpv_set_option_string_(handle_, "force-window", "no");
 
     if (pendingWindowId_ > 0) {
         qint64 wid = pendingWindowId_;
@@ -306,11 +309,11 @@ void MpvBackend::pollEvents() {
             srcWidth_ = srcHeight_ = outWidth_ = outHeight_ = 0;
             loggedVideoGeometry_.clear();
             emit playingChanged(true);
-            emit bufferingChanged(false);
         } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
             ignoreNextEndFile_ = false;
             emit playingChanged(true);
-            emit bufferingChanged(false);
+        } else if (event->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+            emit firstFrameReady();
         } else if (event->event_id == MPV_EVENT_END_FILE) {
             int reason = -1;
             int endError = event->error;
